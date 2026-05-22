@@ -15,11 +15,10 @@ warnings.filterwarnings('ignore', category=colour.utilities.ColourUsageWarning)
 # --- Streamlit Page Configuration ---
 st.set_page_config(page_title="CIE 1931 Config Web App", layout="wide")
 
-def load_color_data(uploaded_file):
-    if uploaded_file is None:
-        return None
+def load_color_data_from_bytes(content_bytes):
+    """ファイルバイナリ(BytesIO)からCSVを読み込む汎用関数"""
     try:
-        content = uploaded_file.getvalue().decode("utf-8").splitlines()
+        content = content_bytes.decode("utf-8").splitlines()
         
         header_row_index = 0
         for i, line in enumerate(content):
@@ -27,8 +26,9 @@ def load_color_data(uploaded_file):
                 header_row_index = i
                 break
                 
-        uploaded_file.seek(0)
-        df = pd.read_csv(uploaded_file, skiprows=header_row_index)
+        # BytesIOを模倣してread_csvに渡す
+        content_stream = io.StringIO("\n".join(content))
+        df = pd.read_csv(content_stream, skiprows=header_row_index)
         
         if 'Name' in df.columns:
             df['Name'] = df['Name'].astype(str).str.strip()
@@ -38,8 +38,23 @@ def load_color_data(uploaded_file):
         
         return df
     except Exception as e:
-        st.error(f"Error loading file: {e}")
+        st.error(f"Error parsing data: {e}")
         return None
+
+def load_color_data(uploaded_file):
+    if uploaded_file is not None:
+        return load_color_data_from_bytes(uploaded_file.getvalue())
+    return None
+
+def load_local_csv(filepath):
+    """ローカルのCSVファイルを読み込む"""
+    if os.path.exists(filepath):
+        try:
+            with open(filepath, 'rb') as f:
+                return load_color_data_from_bytes(f.read())
+        except Exception as e:
+             st.error(f"Error loading local default file '{filepath}': {e}")
+    return None
 
 def draw_gamut_triangle(ax, df, color, linestyle, label, linewidth):
     if df is not None and 'Name' in df.columns and 'x' in df.columns and 'y' in df.columns:
@@ -203,9 +218,10 @@ try:
 except FileNotFoundError:
     st.sidebar.warning("Logo image 'yitoa.png' not found.")
 
+# ★ コピーライトを2行に分割 (<br>タグを使用)
 st.sidebar.markdown(
     "<div style='text-align: center; font-size: 0.8em; color: gray; margin-bottom: 20px;'>"
-    "Copyright(c) YITOA Technology. All rights reserved."
+    "Copyright(c) YITOA Technology.<br>All rights reserved."
     "</div>",
     unsafe_allow_html=True
 )
@@ -220,6 +236,9 @@ col1, col2, col3 = st.columns(3)
 with col1:
     st.subheader("Target")
     file_target = st.file_uploader("Upload Target CSV", type=["csv"], key="target")
+    # ★ Targetファイルがアップロードされていない場合、デフォルトを読み込む
+    if file_target is None:
+        st.info("Using default: target_machbeth.csv")
 
 with col2:
     st.subheader("Before")
@@ -232,7 +251,12 @@ with col3:
 color_space = st.selectbox("Reference Gamut:", ["sRGB", "DCI-P3"])
 
 # --- Core Processing Logic ---
-df_t_full = load_color_data(file_target)
+# Targetデータ：アップロードがあればそれを、なければローカルのデフォルトをロード
+if file_target is not None:
+    df_t_full = load_color_data(file_target)
+else:
+    df_t_full = load_local_csv("target_machbeth.csv")
+    
 df_b_full = load_color_data(file_before)
 df_a_full = load_color_data(file_after)
 
@@ -258,11 +282,9 @@ if unique_names:
     
     selected_name = st.sidebar.selectbox("Select Point ID to inspect:", unique_names)
     
-    # ★ 選択した点のみをプロットするスイッチ
     plot_only_selected = st.sidebar.checkbox("Plot ONLY selected point", value=False)
     
     if plot_only_selected:
-        # スイッチがONなら、描画用データフレームを選択したNameでフィルタリング
         if df_t_full is not None and 'Name' in df_t_full.columns:
             df_t_plot = df_t_full[df_t_full['Name'] == selected_name]
         if df_b_full is not None and 'Name' in df_b_full.columns:
@@ -293,7 +315,6 @@ if unique_names:
 if df_t_full is not None or df_b_full is not None or df_a_full is not None:
     st.markdown("---")
     
-    # フィルタリング済みのデータを渡して描画
     fig = plot_chromaticity_customized(df_t_plot, df_b_plot, df_a_plot, color_space, fig_size, show_labels)
     st.pyplot(fig, width='content')
 
@@ -310,7 +331,7 @@ if df_t_full is not None or df_b_full is not None or df_a_full is not None:
     )
     st.markdown("---")
 
-    # Data Overview Tables (表には常に全データを表示)
+    # Data Overview Tables
     st.markdown("### Data Overview")
     tab1, tab2, tab3 = st.tabs(["Before Data", "After Data", "Target Data"])
     
