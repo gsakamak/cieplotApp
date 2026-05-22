@@ -15,18 +15,65 @@ warnings.filterwarnings('ignore', category=colour.utilities.ColourUsageWarning)
 # --- Streamlit Page Configuration ---
 st.set_page_config(page_title="CIE 1931 Config Web App", layout="wide")
 
+# ==========================================
+# 1. ログイン認証機能
+# ==========================================
+def check_login():
+    """メールアドレスのドメインを確認してログインを判定する"""
+    st.title("🔐 Login")
+    st.markdown("Please enter your company email address to access the app.")
+    
+    # メールアドレス入力欄
+    email = st.text_input("Email Address:")
+    
+    if st.button("Login"):
+        if email:
+            # 入力されたメールアドレスからドメイン部分を抽出
+            parts = email.split('@')
+            if len(parts) == 2:
+                domain = parts[1].lower().strip()
+                # 許可するドメインのリスト
+                allowed_domains = ["yitoa.co.jp", "yitoa.com"]
+                
+                if domain in allowed_domains:
+                    st.success("Login successful!")
+                    st.session_state['authenticated'] = True
+                    st.rerun() # 画面をリロードしてメイン画面へ移行
+                else:
+                    st.error("Access Denied: Invalid email domain.")
+            else:
+                st.error("Please enter a valid email address.")
+        else:
+            st.warning("Email address cannot be empty.")
+
+# セッション状態の初期化
+if 'authenticated' not in st.session_state:
+    st.session_state['authenticated'] = False
+
+# 認証されていない場合はログイン画面のみを表示して終了
+if not st.session_state['authenticated']:
+    check_login()
+    st.stop() # ここで処理を止め、以降のメインアプリのコードは実行させない
+
+# --- 認証を通過した場合、ログアウトボタンをサイドバーの一番上に配置 ---
+if st.sidebar.button("Log Out"):
+    st.session_state['authenticated'] = False
+    st.rerun()
+st.sidebar.markdown("---")
+
+
+# ==========================================
+# 2. メインアプリの機能 (これまでのコード)
+# ==========================================
+
 def load_color_data_from_bytes(content_bytes):
-    """ファイルバイナリ(BytesIO)からCSVを読み込む汎用関数"""
     try:
         content = content_bytes.decode("utf-8").splitlines()
-        
         header_row_index = 0
         for i, line in enumerate(content):
             if "Name" in line or ("x" in line and "y" in line):
                 header_row_index = i
                 break
-                
-        # BytesIOを模倣してread_csvに渡す
         content_stream = io.StringIO("\n".join(content))
         df = pd.read_csv(content_stream, skiprows=header_row_index)
         
@@ -35,7 +82,6 @@ def load_color_data_from_bytes(content_bytes):
             
         df = df.dropna(how='all', axis=1)
         df = df.dropna(how='all', axis=0)
-        
         return df
     except Exception as e:
         st.error(f"Error parsing data: {e}")
@@ -47,7 +93,6 @@ def load_color_data(uploaded_file):
     return None
 
 def load_local_csv(filepath):
-    """ローカルのCSVファイルを読み込む"""
     if os.path.exists(filepath):
         try:
             with open(filepath, 'rb') as f:
@@ -81,18 +126,13 @@ def plot_chromaticity_customized(df_target, df_before, df_after, color_space, fi
     line_w = 1.0 * scale
     line_w_thin = 0.4 * scale
     line_w_cct = 0.8 * scale
-    
     text_offset = 0.008 * scale
 
     fig, ax = plt.subplots(figsize=(fig_size, fig_size))
     
     plot_chromaticity_diagram_CIE1931(
-        axes=ax,
-        show=False, 
-        title='',
-        bounding_box=(0, 0.9, 0, 0.9),
-        standalone=False,
-        transparent_background=True
+        axes=ax, show=False, title='',
+        bounding_box=(0, 0.9, 0, 0.9), standalone=False, transparent_background=True
     )
     
     ax.set_title('CIE 1931 xy Chromaticity Diagram', fontsize=font_title, color='black', pad=10*scale)
@@ -130,36 +170,28 @@ def plot_chromaticity_customized(df_target, df_before, df_after, color_space, fi
     ax.plot([xy[0, 0], xy[-1, 0]], [xy[0, 1], xy[-1, 1]], color='#E0E0E0', linewidth=line_w_thin, zorder=1)
 
     if color_space.upper() == 'DCI-P3':
-        gamut_x = [0.680, 0.265, 0.150, 0.680]
-        gamut_y = [0.320, 0.690, 0.060, 0.320]
+        gamut_x, gamut_y = [0.680, 0.265, 0.150, 0.680], [0.320, 0.690, 0.060, 0.320]
         label_text = 'DCI-P3 (Ref)'
     else:
-        gamut_x = [0.640, 0.300, 0.150, 0.640]
-        gamut_y = [0.330, 0.600, 0.060, 0.330]
+        gamut_x, gamut_y = [0.640, 0.300, 0.150, 0.640], [0.330, 0.600, 0.060, 0.330]
         label_text = 'sRGB (Ref)'
-    
     ax.plot(gamut_x, gamut_y, color='lightgray', linestyle='--', linewidth=line_w, label=label_text, zorder=3)
     
     wp_x, wp_y = [], []
     for cct in range(2000, 21000, 500):
-        try:
-            xy_cct = colour.CCT_to_xy(cct)
-        except AttributeError:
-            xy_cct = colour.xy_from_CCT(cct)
+        try: xy_cct = colour.CCT_to_xy(cct)
+        except AttributeError: xy_cct = colour.xy_from_CCT(cct)
         wp_x.append(xy_cct[0])
         wp_y.append(xy_cct[1])
     ax.plot(wp_x, wp_y, color='#E8E8E8', alpha=0.7, linestyle='-', linewidth=line_w_cct, zorder=2)
     
     target_ccts = [20000, 15000, 10000, 8000, 6000, 4000, 2000]
     for cct in target_ccts:
-        try:
-            xy_cct = colour.CCT_to_xy(cct)
-        except AttributeError:
-            xy_cct = colour.xy_from_CCT(cct)
+        try: xy_cct = colour.CCT_to_xy(cct)
+        except AttributeError: xy_cct = colour.xy_from_CCT(cct)
         ax.scatter(xy_cct[0], xy_cct[1], color='#E8E8E8', alpha=0.9, s=marker_cct, zorder=4)
         ax.text(xy_cct[0] + 0.005, xy_cct[1] + 0.005, f'{cct}K', fontsize=7*scale, color='darkgray', alpha=0.9, zorder=5)
 
-    # --- Plot Data & Draw Labels ---
     if df_target is not None and not df_target.empty and 'x' in df_target.columns and 'y' in df_target.columns:
         ax.scatter(df_target['x'], df_target['y'], marker='o', color='black', edgecolors='none', s=marker_target, label='Target', zorder=6)
         if show_labels and 'Name' in df_target.columns:
@@ -186,12 +218,10 @@ def plot_chromaticity_customized(df_target, df_before, df_after, color_space, fi
     
     legend = ax.legend(loc='upper right', fontsize=font_s)
     if legend:
-        for text in legend.get_texts():
-            text.set_color('black')
+        for text in legend.get_texts(): text.set_color('black')
             
     ax.set_xlim(0.0, 0.9)
     ax.set_ylim(0.0, 0.9)
-    
     fig.tight_layout()
     return fig
 
@@ -199,15 +229,10 @@ def get_delta_e_from_csv(row):
     possible_names = ['DeltaE2000', 'DeltaE', 'Delta E', 'dE', 'ΔE', 'Delta_E', 'Delta_E2000']
     for col in possible_names:
         if col in row.index and pd.notna(row[col]):
-            try:
-                return f"{float(row[col]):.2f}"
-            except ValueError:
-                return str(row[col])
+            try: return f"{float(row[col]):.2f}"
+            except ValueError: return str(row[col])
     return "N/A"
 
-# ==========================================
-# Web UI (Streamlit) Setup
-# ==========================================
 st.title("CIE 1931 Chromaticity Analyzer")
 st.markdown("Upload your CSV files to plot the color data on the CIE 1931 chromaticity diagram.")
 
@@ -218,7 +243,6 @@ try:
 except FileNotFoundError:
     st.sidebar.warning("Logo image 'yitoa.png' not found.")
 
-# ★ コピーライトを2行に分割 (<br>タグを使用)
 st.sidebar.markdown(
     "<div style='text-align: center; font-size: 0.8em; color: gray; margin-bottom: 20px;'>"
     "Copyright(c) YITOA Technology.<br>All rights reserved."
@@ -236,7 +260,6 @@ col1, col2, col3 = st.columns(3)
 with col1:
     st.subheader("Target")
     file_target = st.file_uploader("Upload Target CSV", type=["csv"], key="target")
-    # ★ Targetファイルがアップロードされていない場合、デフォルトを読み込む
     if file_target is None:
         st.info("Using default: target_machbeth.csv")
 
@@ -251,7 +274,6 @@ with col3:
 color_space = st.selectbox("Reference Gamut:", ["sRGB", "DCI-P3"])
 
 # --- Core Processing Logic ---
-# Targetデータ：アップロードがあればそれを、なければローカルのデフォルトをロード
 if file_target is not None:
     df_t_full = load_color_data(file_target)
 else:
@@ -262,16 +284,12 @@ df_a_full = load_color_data(file_after)
 
 # --- Dynamic Data Inspector in Sidebar ---
 all_names = []
-if df_t_full is not None and 'Name' in df_t_full.columns:
-    all_names.extend(df_t_full['Name'].tolist())
-if df_b_full is not None and 'Name' in df_b_full.columns:
-    all_names.extend(df_b_full['Name'].tolist())
-if df_a_full is not None and 'Name' in df_a_full.columns:
-    all_names.extend(df_a_full['Name'].tolist())
+if df_t_full is not None and 'Name' in df_t_full.columns: all_names.extend(df_t_full['Name'].tolist())
+if df_b_full is not None and 'Name' in df_b_full.columns: all_names.extend(df_b_full['Name'].tolist())
+if df_a_full is not None and 'Name' in df_a_full.columns: all_names.extend(df_a_full['Name'].tolist())
 
 unique_names = sorted(list(set([str(n) for n in all_names if pd.notna(n)])))
 
-# 描画用のデータフレーム（初期状態はフルデータ）
 df_t_plot = df_t_full
 df_b_plot = df_b_full
 df_a_plot = df_a_full
@@ -281,16 +299,12 @@ if unique_names:
     st.sidebar.header("Data Inspector")
     
     selected_name = st.sidebar.selectbox("Select Point ID to inspect:", unique_names)
-    
     plot_only_selected = st.sidebar.checkbox("Plot ONLY selected point", value=False)
     
     if plot_only_selected:
-        if df_t_full is not None and 'Name' in df_t_full.columns:
-            df_t_plot = df_t_full[df_t_full['Name'] == selected_name]
-        if df_b_full is not None and 'Name' in df_b_full.columns:
-            df_b_plot = df_b_full[df_b_full['Name'] == selected_name]
-        if df_a_full is not None and 'Name' in df_a_full.columns:
-            df_a_plot = df_a_full[df_a_full['Name'] == selected_name]
+        if df_t_full is not None and 'Name' in df_t_full.columns: df_t_plot = df_t_full[df_t_full['Name'] == selected_name]
+        if df_b_full is not None and 'Name' in df_b_full.columns: df_b_plot = df_b_full[df_b_full['Name'] == selected_name]
+        if df_a_full is not None and 'Name' in df_a_full.columns: df_a_plot = df_a_full[df_a_full['Name'] == selected_name]
     
     st.sidebar.markdown(f"### Metrics for `{selected_name}`")
     
@@ -318,7 +332,6 @@ if df_t_full is not None or df_b_full is not None or df_a_full is not None:
     fig = plot_chromaticity_customized(df_t_plot, df_b_plot, df_a_plot, color_space, fig_size, show_labels)
     st.pyplot(fig, width='content')
 
-    # PNG Download Handler
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=300, facecolor=fig.get_facecolor(), edgecolor='none')
     buf.seek(0)
@@ -331,26 +344,19 @@ if df_t_full is not None or df_b_full is not None or df_a_full is not None:
     )
     st.markdown("---")
 
-    # Data Overview Tables
     st.markdown("### Data Overview")
     tab1, tab2, tab3 = st.tabs(["Before Data", "After Data", "Target Data"])
     
     with tab1:
-        if df_b_full is not None:
-            st.dataframe(df_b_full, width='stretch')
-        else:
-            st.info("No Before data uploaded or invalid format.")
+        if df_b_full is not None: st.dataframe(df_b_full, width='stretch')
+        else: st.info("No Before data uploaded or invalid format.")
             
     with tab2:
-        if df_a_full is not None:
-            st.dataframe(df_a_full, width='stretch')
-        else:
-            st.info("No After data uploaded or invalid format.")
+        if df_a_full is not None: st.dataframe(df_a_full, width='stretch')
+        else: st.info("No After data uploaded or invalid format.")
             
     with tab3:
-        if df_t_full is not None:
-            st.dataframe(df_t_full, width='stretch')
-        else:
-            st.info("No Target data uploaded or invalid format.")
+        if df_t_full is not None: st.dataframe(df_t_full, width='stretch')
+        else: st.info("No Target data uploaded or invalid format.")
 else:
     st.info("Please upload at least one CSV file to generate the diagram.")
