@@ -16,46 +16,49 @@ warnings.filterwarnings('ignore', category=colour.utilities.ColourUsageWarning)
 st.set_page_config(page_title="CIE 1931 Config Web App", layout="wide")
 
 # ==========================================
-# 1. ログイン認証機能
+# 1. Login Authentication Function
 # ==========================================
 def check_login():
-    """メールアドレスのドメインを確認してログインを判定する"""
+    """Validates email domain and password (must match email string)"""
     st.title("🔐 Login")
-    st.markdown("Please enter your company email address to access the app.")
+    st.markdown("Please enter your company email and password to access the app.")
     
-    # メールアドレス入力欄
-    email = st.text_input("Email Address:")
+    # Credentials Inputs
+    email = st.text_input("Email Address:").strip()
+    password = st.text_input("Password:", type="password").strip()
     
     if st.button("Login"):
-        if email:
-            # 入力されたメールアドレスからドメイン部分を抽出
+        if email and password:
             parts = email.split('@')
             if len(parts) == 2:
-                domain = parts[1].lower().strip()
-                # 許可するドメインのリスト
+                domain = parts[1].lower()
                 allowed_domains = ["yitoa.co.jp", "yitoa.com"]
                 
-                if domain in allowed_domains:
+                # Condition 1: Domain check
+                # Condition 2: Password must exactly match the email address
+                if domain in allowed_domains and password == email:
                     st.success("Login successful!")
                     st.session_state['authenticated'] = True
-                    st.rerun() # 画面をリロードしてメイン画面へ移行
-                else:
+                    st.rerun()
+                elif domain not in allowed_domains:
                     st.error("Access Denied: Invalid email domain.")
+                else:
+                    st.error("Access Denied: Password must exactly match your Email Address.")
             else:
                 st.error("Please enter a valid email address.")
         else:
-            st.warning("Email address cannot be empty.")
+            st.warning("Please fill in both Email Address and Password.")
 
-# セッション状態の初期化
+# Initialize session state for authentication
 if 'authenticated' not in st.session_state:
     st.session_state['authenticated'] = False
 
-# 認証されていない場合はログイン画面のみを表示して終了
+# If not authenticated, show login screen and stop further execution
 if not st.session_state['authenticated']:
     check_login()
-    st.stop() # ここで処理を止め、以降のメインアプリのコードは実行させない
+    st.stop()
 
-# --- 認証を通過した場合、ログアウトボタンをサイドバーの一番上に配置 ---
+# --- Logout button at the top of the sidebar ---
 if st.sidebar.button("Log Out"):
     st.session_state['authenticated'] = False
     st.rerun()
@@ -63,7 +66,7 @@ st.sidebar.markdown("---")
 
 
 # ==========================================
-# 2. メインアプリの機能 (これまでのコード)
+# 2. Main Application Features
 # ==========================================
 
 def load_color_data_from_bytes(content_bytes):
@@ -313,7 +316,7 @@ if unique_names:
         if not t_row.empty:
             st.sidebar.markdown(f"<span style='color: black; font-size: 1.2em;'>●</span> **Target Point**:<br>x: `{t_row.iloc[0]['x']:.4f}`<br>y: `{t_row.iloc[0]['y']:.4f}`", unsafe_allow_html=True)
             
-    if df_b_full is not None and 'Name' in df_b_full.columns:
+    if df_b_full is not None notebook and 'Name' in df_b_full.columns:
         b_row = df_b_full[df_b_full['Name'] == selected_name]
         if not b_row.empty:
             de_b = get_delta_e_from_csv(b_row.iloc[0])
