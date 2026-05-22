@@ -58,12 +58,6 @@ if not st.session_state['authenticated']:
     check_login()
     st.stop()
 
-# --- Logout button at the top of the sidebar ---
-if st.sidebar.button("Log Out"):
-    st.session_state['authenticated'] = False
-    st.rerun()
-st.sidebar.markdown("---")
-
 
 # ==========================================
 # 2. Main Application Features
@@ -236,28 +230,11 @@ def get_delta_e_from_csv(row):
             except ValueError: return str(row[col])
     return "N/A"
 
+
+# --- Layout: Main Page ---
 st.title("CIE 1931 Chromaticity Analyzer")
 st.markdown("Upload your CSV files to plot the color data on the CIE 1931 chromaticity diagram.")
 
-# --- Sidebar Setup ---
-try:
-    logo = Image.open("yitoa.png")
-    st.sidebar.image(logo, width='stretch')
-except FileNotFoundError:
-    st.sidebar.warning("Logo image 'yitoa.png' not found.")
-
-st.sidebar.markdown(
-    "<div style='text-align: center; font-size: 0.8em; color: gray; margin-bottom: 20px;'>"
-    "Copyright(c) YITOA Technology.<br>All rights reserved."
-    "</div>",
-    unsafe_allow_html=True
-)
-
-st.sidebar.header("Graph Settings")
-fig_size = st.sidebar.slider("Graph Size (inches)", min_value=2, max_value=20, value=4, step=1)
-show_labels = st.sidebar.checkbox("Show Point Names on Graph", value=False)
-
-# --- Layout: Inputs ---
 col1, col2, col3 = st.columns(3)
 
 with col1:
@@ -285,18 +262,40 @@ else:
 df_b_full = load_color_data(file_before)
 df_a_full = load_color_data(file_after)
 
-# --- Dynamic Data Inspector in Sidebar ---
+# Extract unique names for inspector
 all_names = []
 if df_t_full is not None and 'Name' in df_t_full.columns: all_names.extend(df_t_full['Name'].tolist())
 if df_b_full is not None and 'Name' in df_b_full.columns: all_names.extend(df_b_full['Name'].tolist())
 if df_a_full is not None and 'Name' in df_a_full.columns: all_names.extend(df_a_full['Name'].tolist())
-
 unique_names = sorted(list(set([str(n) for n in all_names if pd.notna(n)])))
 
 df_t_plot = df_t_full
 df_b_plot = df_b_full
 df_a_plot = df_a_full
 
+# ==========================================
+# 3. Sidebar UI Assembly
+# ==========================================
+
+# Logo and Copyright
+try:
+    logo = Image.open("yitoa.png")
+    st.sidebar.image(logo, width='stretch')
+except FileNotFoundError:
+    st.sidebar.warning("Logo image 'yitoa.png' not found.")
+
+st.sidebar.markdown(
+    "<div style='text-align: center; font-size: 0.8em; color: gray; margin-bottom: 20px;'>"
+    "Copyright(c) YITOA Technology.<br>All rights reserved."
+    "</div>",
+    unsafe_allow_html=True
+)
+
+st.sidebar.header("Graph Settings")
+fig_size = st.sidebar.slider("Graph Size (inches)", min_value=2, max_value=20, value=4, step=1)
+show_labels = st.sidebar.checkbox("Show Point Names on Graph", value=False)
+
+# Data Inspector
 if unique_names:
     st.sidebar.markdown("---")
     st.sidebar.header("Data Inspector")
@@ -328,7 +327,15 @@ if unique_names:
             de_a = get_delta_e_from_csv(a_row.iloc[0])
             st.sidebar.markdown(f"<span style='color: #00FA00; font-size: 1.2em;'>●</span> **After Point**:<br>x: `{a_row.iloc[0]['x']:.4f}`<br>y: `{a_row.iloc[0]['y']:.4f}`<br>ΔE (CSV Data): **`{de_a}`**", unsafe_allow_html=True)
 
-# --- Rendering & Output Display ---
+# ★ Log Out button at the VERY BOTTOM of the sidebar
+st.sidebar.markdown("---")
+if st.sidebar.button("Log Out"):
+    st.session_state['authenticated'] = False
+    st.rerun()
+
+# ==========================================
+# 4. Rendering & Output Display
+# ==========================================
 if df_t_full is not None or df_b_full is not None or df_a_full is not None:
     st.markdown("---")
     
