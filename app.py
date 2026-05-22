@@ -316,7 +316,7 @@ if unique_names:
         if not t_row.empty:
             st.sidebar.markdown(f"<span style='color: black; font-size: 1.2em;'>●</span> **Target Point**:<br>x: `{t_row.iloc[0]['x']:.4f}`<br>y: `{t_row.iloc[0]['y']:.4f}`", unsafe_allow_html=True)
             
-    if df_b_full is not None notebook and 'Name' in df_b_full.columns:
+    if df_b_full is not None and 'Name' in df_b_full.columns:
         b_row = df_b_full[df_b_full['Name'] == selected_name]
         if not b_row.empty:
             de_b = get_delta_e_from_csv(b_row.iloc[0])
