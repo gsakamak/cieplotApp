@@ -1,5 +1,7 @@
 import os
+import math
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
 import colour
@@ -65,15 +67,32 @@ if not st.session_state['authenticated']:
 
 def load_color_data_from_bytes(content_bytes):
     try:
-        content = content_bytes.decode("utf-8").splitlines()
+        # 1. 文字コードの自動判定・デコード (ExcelのShift-JISやBOM付UTF-8対策)
+        try:
+            decoded_str = content_bytes.decode('utf-8-sig')
+        except UnicodeDecodeError:
+            try:
+                decoded_str = content_bytes.decode('cp932')
+            except UnicodeDecodeError:
+                decoded_str = content_bytes.decode('shift_jis', errors='replace')
+                
+        content = decoded_str.splitlines()
+        
+        # 2. データのヘッダー行を特定する (Name と R または x がある行)
         header_row_index = 0
         for i, line in enumerate(content):
-            if "Name" in line or ("x" in line and "y" in line):
+            if "Name" in line and ("R" in line or "x" in line):
                 header_row_index = i
                 break
+                
         content_stream = io.StringIO("\n".join(content))
         df = pd.read_csv(content_stream, skiprows=header_row_index)
         
+        # 3. 列名（ヘッダー）の空白文字を強制削除 (" R " -> "R" に整形)
+        if not df.empty:
+            df.columns = df.columns.astype(str).str.strip()
+        
+        # 4. Name列内の空白文字の削除
         if 'Name' in df.columns:
             df['Name'] = df['Name'].astype(str).str.strip()
             
@@ -230,6 +249,214 @@ def get_delta_e_from_csv(row):
             except ValueError: return str(row[col])
     return "N/A"
 
+# ==========================================
+# ★ 追加: ユーザー指定の純粋な手動計算ロジック
+# ==========================================
+D65_X, D65_Y, D65_Z = 95.047, 100.000, 108.883
+
+def rgb_8bit_to_target_XYZ(r, g, b):
+    r_l = (r / 255.0) ** 2.2
+    g_l = (g / 255.0) ** 2.2
+    b_l = (b / 255.0) ** 2.2
+
+    X = (0.4124564 * r_l + 0.3575761 * g_l + 0.1804375 * b_l) * 100.0
+    Y = (0.2126729 * r_l + 0.7151522 * g_l + 0.0721750 * b_l) * 100.0
+    Z = (0.0193339 * r_l + 0.1191920 * g_l + 0.9503041 * b_l) * 100.0
+    return X, Y, Z
+
+def measured_xyY_to_XYZ(x, y, Y_meas, Y_white_meas):
+    Y_norm = (Y_meas / Y_white_meas) * 100.0 if Y_white_meas > 0 else 0
+    if y == 0:
+        return 0.0, 0.0, 0.0
+    X = (x * Y_norm) / y
+    Z = ((1.0 - x - y) * Y_norm) / y
+    return X, Y_norm, Z
+
+def f_lab(t):
+    delta = 6.0 / 29.0
+    if t > delta ** 3:
+        return math.pow(t, 1.0 / 3.0)
+    else:
+        return (1.0 / 3.0) * ((29.0 / 6.0) ** 2) * t + (4.0 / 29.0)
+
+def XYZ_to_Lab(X, Y, Z):
+    L = 116.0 * f_lab(Y / D65_Y) - 16.0
+    a = 500.0 * (f_lab(X / D65_X) - f_lab(Y / D65_Y))
+    b = 200.0 * (f_lab(Y / D65_Y) - f_lab(Z / D65_Z))
+    return L, a, b
+
+def delta_E_2000(Lab1, Lab2):
+    L1, a1, b1 = Lab1
+    L2, a2, b2 = Lab2
+    k_L, k_C, k_H = 1.0, 1.0, 1.0
+
+    C1 = math.sqrt(a1**2 + b1**2)
+    C2 = math.sqrt(a2**2 + b2**2)
+    C_bar = (C1 + C2) / 2.0
+
+    G = 0.5 * (1.0 - math.sqrt((C_bar**7) / (C_bar**7 + 25.0**7)))
+
+    a1_prime = (1.0 + G) * a1
+    a2_prime = (1.0 + G) * a2
+
+    C1_prime = math.sqrt(a1_prime**2 + b1**2)
+    C2_prime = math.sqrt(a2_prime**2 + b2**2)
+
+    h1_prime = math.degrees(math.atan2(b1, a1_prime)) % 360.0 if (b1 != 0 or a1_prime != 0) else 0.0
+    h2_prime = math.degrees(math.atan2(b2, a2_prime)) % 360.0 if (b2 != 0 or a2_prime != 0) else 0.0
+
+    dL_prime = L2 - L1
+    dC_prime = C2_prime - C1_prime
+
+    if C1_prime * C2_prime == 0:
+        dh_prime = 0.0
+    elif abs(h2_prime - h1_prime) <= 180.0:
+        dh_prime = h2_prime - h1_prime
+    elif h2_prime <= h1_prime:
+        dh_prime = h2_prime - h1_prime + 360.0
+    else:
+        dh_prime = h2_prime - h1_prime - 360.0
+
+    dH_prime = 2.0 * math.sqrt(C1_prime * C2_prime) * math.sin(math.radians(dh_prime / 2.0))
+
+    L_bar_prime = (L1 + L2) / 2.0
+    C_bar_prime = (C1_prime + C2_prime) / 2.0
+
+    if C1_prime * C2_prime == 0:
+        H_bar_prime = h1_prime + h2_prime
+    elif abs(h1_prime - h2_prime) <= 180.0:
+        H_bar_prime = (h1_prime + h2_prime) / 2.0
+    elif (h1_prime + h2_prime) < 360.0:
+        H_bar_prime = (h1_prime + h2_prime + 360.0) / 2.0
+    else:
+        H_bar_prime = (h1_prime + h2_prime - 360.0) / 2.0
+
+    T = 1.0 - 0.17 * math.cos(math.radians(H_bar_prime - 30.0)) \
+            + 0.24 * math.cos(math.radians(2.0 * H_bar_prime)) \
+            + 0.32 * math.cos(math.radians(3.0 * H_bar_prime + 6.0)) \
+            - 0.20 * math.cos(math.radians(4.0 * H_bar_prime - 63.0))
+
+    dTheta = 30.0 * math.exp(-(((H_bar_prime - 275.0) / 25.0) ** 2))
+    R_c = 2.0 * math.sqrt((C_bar_prime**7) / (C_bar_prime**7 + 25.0**7))
+    
+    S_L = 1.0 + ((0.015 * (L_bar_prime - 50.0)**2) / math.sqrt(20.0 + (L_bar_prime - 50.0)**2))
+    S_C = 1.0 + 0.045 * C_bar_prime
+    S_H = 1.0 + 0.015 * C_bar_prime * T
+    R_T = -math.sin(math.radians(2.0 * dTheta)) * R_c
+
+    dE00 = math.sqrt(
+        (dL_prime / (k_L * S_L))**2 +
+        (dC_prime / (k_C * S_C))**2 +
+        (dH_prime / (k_H * S_H))**2 +
+        R_T * (dC_prime / (k_C * S_C)) * (dH_prime / (k_H * S_H))
+    )
+
+    return dE00
+
+
+def calculate_custom_delta_e(df_meas, row_meas, df_target, row_name, color_space):
+    try:
+        if df_target is None or df_meas is None: return "N/A"
+        
+        t_row = df_target[df_target['Name'] == row_name]
+        if t_row.empty: return "N/A"
+        t_row = t_row.iloc[0]
+        
+        # 1. ターゲットRGBの取得 (8bit)
+        if not all(c in t_row for c in ['R', 'G', 'B']):
+            return "N/A (Missing Target RGB)"
+            
+        R, G, B = float(t_row['R']), float(t_row['G']), float(t_row['B'])
+        x_m, y_m = float(row_meas['x']), float(row_meas['y'])
+        
+        # 2. 測定されたY値（輝度）の取得
+        lum_cols = ['Y', 'Lv', 'Luminance', 'L']
+        y_col = next((c for c in lum_cols if c in df_meas.columns), None)
+        if not y_col:
+            return "N/A (Missing Measured Y)"
+        
+        Y_m = float(row_meas[y_col])
+        
+        # 3. 測定された白のY値を取得し輝度正規化の基準とする
+        white_names = ['white', 'w', '19', 'patch 19', 'neutral 8']
+        df_meas_names = df_meas['Name'].astype(str).str.strip().str.lower()
+        white_row = df_meas[df_meas_names.isin(white_names)]
+        
+        if not white_row.empty:
+            Y_white = float(white_row.iloc[0][y_col])
+        elif all(c in df_meas.columns for c in ['R', 'G', 'B']):
+            white_row = df_meas[(df_meas['R']==255) & (df_meas['G']==255) & (df_meas['B']==255)]
+            if not white_row.empty:
+                Y_white = float(white_row.iloc[0][y_col])
+            else:
+                Y_white = float(df_meas[y_col].max())
+        else:
+            Y_white = float(df_meas[y_col].max())
+            
+        if Y_white <= 0: return "N/A"
+        
+        # 4. Target XYZ計算とLab変換
+        target_XYZ = rgb_8bit_to_target_XYZ(R, G, B)
+        target_Lab = XYZ_to_Lab(*target_XYZ)
+        
+        # 5. Measured XYZ計算とLab変換
+        meas_XYZ = measured_xyY_to_XYZ(x_m, y_m, Y_m, Y_white)
+        meas_Lab = XYZ_to_Lab(*meas_XYZ)
+            
+        # 6. CIEDE2000の算出
+        de2000 = delta_E_2000(target_Lab, meas_Lab)
+        
+        return f"{de2000:.4f}"
+        
+    except Exception as e:
+        return "N/A"
+
+# ==========================================
+# ★ 追加: UI表示用に正規化Y値を取得するヘルパー関数
+# ==========================================
+def get_target_y_norm(df_target, row_name):
+    try:
+        if df_target is None: return "N/A"
+        t_row = df_target[df_target['Name'] == row_name]
+        if t_row.empty: return "N/A"
+        t_row = t_row.iloc[0]
+        if not all(c in t_row for c in ['R', 'G', 'B']): return "N/A"
+        R, G, B = float(t_row['R']), float(t_row['G']), float(t_row['B'])
+        _, Y, _ = rgb_8bit_to_target_XYZ(R, G, B)
+        return f"{Y:.2f}"
+    except Exception:
+        return "N/A"
+
+def get_measured_y_norm(df_meas, row_meas):
+    try:
+        if df_meas is None: return "N/A"
+        lum_cols = ['Y', 'Lv', 'Luminance', 'L']
+        y_col = next((c for c in lum_cols if c in df_meas.columns), None)
+        if not y_col: return "N/A"
+        
+        Y_m = float(row_meas[y_col])
+        
+        white_names = ['white', 'w', '19', 'patch 19', 'neutral 8']
+        df_meas_names = df_meas['Name'].astype(str).str.strip().str.lower()
+        white_row = df_meas[df_meas_names.isin(white_names)]
+        
+        if not white_row.empty:
+            Y_white = float(white_row.iloc[0][y_col])
+        elif all(c in df_meas.columns for c in ['R', 'G', 'B']):
+            white_row = df_meas[(df_meas['R']==255) & (df_meas['G']==255) & (df_meas['B']==255)]
+            if not white_row.empty:
+                Y_white = float(white_row.iloc[0][y_col])
+            else:
+                Y_white = float(df_meas[y_col].max())
+        else:
+            Y_white = float(df_meas[y_col].max())
+            
+        if Y_white <= 0: return "N/A"
+        Y_norm = (Y_m / Y_white) * 100.0
+        return f"{Y_norm:.2f}"
+    except Exception:
+        return "N/A"
+
 
 # --- Layout: Main Page ---
 st.title("CIE 1931 Chromaticity Analyzer")
@@ -313,25 +540,51 @@ if unique_names:
     if df_t_full is not None and 'Name' in df_t_full.columns:
         t_row = df_t_full[df_t_full['Name'] == selected_name]
         if not t_row.empty:
-            st.sidebar.markdown(f"<span style='color: black; font-size: 1.2em;'>●</span> **Target Point**:<br>x: `{t_row.iloc[0]['x']:.4f}`<br>y: `{t_row.iloc[0]['y']:.4f}`", unsafe_allow_html=True)
+            t_y_norm = get_target_y_norm(df_t_full, selected_name)
+            st.sidebar.markdown(f"<span style='color: black; font-size: 1.2em;'>●</span> **Target Point**:<br>x: `{t_row.iloc[0]['x']:.4f}`<br>y: `{t_row.iloc[0]['y']:.4f}`<br>Y (Norm): `{t_y_norm}`", unsafe_allow_html=True)
             
     if df_b_full is not None and 'Name' in df_b_full.columns:
         b_row = df_b_full[df_b_full['Name'] == selected_name]
         if not b_row.empty:
             de_b = get_delta_e_from_csv(b_row.iloc[0])
-            st.sidebar.markdown(f"<span style='color: #FF40FF; font-size: 1.2em;'>●</span> **Before Point**:<br>x: `{b_row.iloc[0]['x']:.4f}`<br>y: `{b_row.iloc[0]['y']:.4f}`<br>ΔE (CSV Data): **`{de_b}`**", unsafe_allow_html=True)
+            calc_de_b = calculate_custom_delta_e(df_b_full, b_row.iloc[0], df_t_full, selected_name, color_space)
+            b_y_norm = get_measured_y_norm(df_b_full, b_row.iloc[0])
+            st.sidebar.markdown(f"<span style='color: #FF40FF; font-size: 1.2em;'>●</span> **Before Point**:<br>x: `{b_row.iloc[0]['x']:.4f}`<br>y: `{b_row.iloc[0]['y']:.4f}`<br>Y (Norm): `{b_y_norm}`<br>ΔE (CSV Data): **`{de_b}`**<br>ΔE (Calculated): **`{calc_de_b}`**", unsafe_allow_html=True)
             
     if df_a_full is not None and 'Name' in df_a_full.columns:
         a_row = df_a_full[df_a_full['Name'] == selected_name]
         if not a_row.empty:
             de_a = get_delta_e_from_csv(a_row.iloc[0])
-            st.sidebar.markdown(f"<span style='color: #00FA00; font-size: 1.2em;'>●</span> **After Point**:<br>x: `{a_row.iloc[0]['x']:.4f}`<br>y: `{a_row.iloc[0]['y']:.4f}`<br>ΔE (CSV Data): **`{de_a}`**", unsafe_allow_html=True)
+            calc_de_a = calculate_custom_delta_e(df_a_full, a_row.iloc[0], df_t_full, selected_name, color_space)
+            a_y_norm = get_measured_y_norm(df_a_full, a_row.iloc[0])
+            st.sidebar.markdown(f"<span style='color: #00FA00; font-size: 1.2em;'>●</span> **After Point**:<br>x: `{a_row.iloc[0]['x']:.4f}`<br>y: `{a_row.iloc[0]['y']:.4f}`<br>Y (Norm): `{a_y_norm}`<br>ΔE (CSV Data): **`{de_a}`**<br>ΔE (Calculated): **`{calc_de_a}`**", unsafe_allow_html=True)
 
 # ★ Log Out button at the VERY BOTTOM of the sidebar
 st.sidebar.markdown("---")
 if st.sidebar.button("Log Out"):
     st.session_state['authenticated'] = False
     st.rerun()
+
+# ==========================================
+# ★ 追加: Data Overview表示用の列追加ロジック
+# ==========================================
+def prepare_display_df(df_meas, df_target, color_space):
+    if df_meas is None: return None
+    df_disp = df_meas.copy()
+    if df_target is not None and 'Name' in df_disp.columns:
+        calc_de_list = []
+        csv_de_list = []
+        for _, row in df_disp.iterrows():
+            name = row['Name']
+            calc_de_list.append(calculate_custom_delta_e(df_meas, row, df_target, name, color_space))
+            csv_de_list.append(get_delta_e_from_csv(row))
+        df_disp['ΔE (CSV Data)'] = csv_de_list
+        df_disp['ΔE (Calculated)'] = calc_de_list
+    return df_disp
+
+df_b_display = prepare_display_df(df_b_full, df_t_full, color_space)
+df_a_display = prepare_display_df(df_a_full, df_t_full, color_space)
+df_t_display = df_t_full.copy() if df_t_full is not None else None
 
 # ==========================================
 # 4. Rendering & Output Display
@@ -358,15 +611,15 @@ if df_t_full is not None or df_b_full is not None or df_a_full is not None:
     tab1, tab2, tab3 = st.tabs(["Before Data", "After Data", "Target Data"])
     
     with tab1:
-        if df_b_full is not None: st.dataframe(df_b_full, width='stretch')
+        if df_b_display is not None: st.dataframe(df_b_display, width='stretch')
         else: st.info("No Before data uploaded or invalid format.")
             
     with tab2:
-        if df_a_full is not None: st.dataframe(df_a_full, width='stretch')
+        if df_a_display is not None: st.dataframe(df_a_display, width='stretch')
         else: st.info("No After data uploaded or invalid format.")
             
     with tab3:
-        if df_t_full is not None: st.dataframe(df_t_full, width='stretch')
+        if df_t_display is not None: st.dataframe(df_t_display, width='stretch')
         else: st.info("No Target data uploaded or invalid format.")
 else:
     st.info("Please upload at least one CSV file to generate the diagram.")
