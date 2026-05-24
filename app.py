@@ -1,5 +1,6 @@
 import os
 import math
+import re
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -494,7 +495,12 @@ all_names = []
 if df_t_full is not None and 'Name' in df_t_full.columns: all_names.extend(df_t_full['Name'].tolist())
 if df_b_full is not None and 'Name' in df_b_full.columns: all_names.extend(df_b_full['Name'].tolist())
 if df_a_full is not None and 'Name' in df_a_full.columns: all_names.extend(df_a_full['Name'].tolist())
-unique_names = sorted(list(set([str(n) for n in all_names if pd.notna(n)])))
+
+# ★ 追加: 自然順ソート（数値の大小 -> アルファベット順）のためのキー関数
+def natural_sort_key(s):
+    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', str(s))]
+
+unique_names = sorted(list(set([str(n) for n in all_names if pd.notna(n)])), key=natural_sort_key)
 
 df_t_plot = df_t_full
 df_b_plot = df_b_full
@@ -566,7 +572,7 @@ if st.sidebar.button("Log Out"):
     st.rerun()
 
 # ==========================================
-# ★ 追加: Data Overview表示用の列追加ロジック
+# ★ Data Overview表示用の列追加ロジック
 # ==========================================
 def prepare_display_df(df_meas, df_target, color_space):
     if df_meas is None: return None
@@ -605,6 +611,71 @@ if df_t_full is not None or df_b_full is not None or df_a_full is not None:
         file_name="cie1931_chromaticity_diagram.png",
         mime="image/png"
     )
+    st.markdown("---")
+
+    # ==========================================
+    # ★ 追加: Before/After ΔE 折れ線グラフ
+    # ==========================================
+    st.markdown("### ΔE Line Chart (Before vs After)")
+    
+    # データをフィルタリングするためのマルチセレクトを追加
+    selected_names_for_plot = st.multiselect(
+        "Select Data Points to Plot:", 
+        options=unique_names, 
+        default=unique_names
+    )
+    
+    de_source = st.radio("Select ΔE Source for Line Chart:", ["Calculated", "CSV Data"], horizontal=True)
+    
+    col_name = 'ΔE (Calculated)' if de_source == "Calculated" else 'ΔE (CSV Data)'
+    
+    de_b_vals = []
+    de_a_vals = []
+    
+    for name in selected_names_for_plot:
+        b_val, a_val = np.nan, np.nan
+        if df_b_display is not None:
+            r = df_b_display[df_b_display['Name'] == name]
+            if not r.empty:
+                val = r.iloc[0].get(col_name, "N/A")
+                if val != "N/A":
+                    try: b_val = float(val)
+                    except ValueError: pass
+        if df_a_display is not None:
+            r = df_a_display[df_a_display['Name'] == name]
+            if not r.empty:
+                val = r.iloc[0].get(col_name, "N/A")
+                if val != "N/A":
+                    try: a_val = float(val)
+                    except ValueError: pass
+        de_b_vals.append(b_val)
+        de_a_vals.append(a_val)
+        
+    if selected_names_for_plot:
+        fig_line, ax_line = plt.subplots(figsize=(10, 4))
+        
+        # ΔE=2.0ラインのみ実線 (Solid line ONLY for ΔE=2.0)
+        # ※指示に基づき色を 'blue' に変更
+        ax_line.axhline(y=2.0, color='blue', linestyle='-', linewidth=1.5, label='ΔE = 2.0')
+        ax_line.axhspan(0, 2.0, color='#00FA00', alpha=0.1) # ΔE<2.0がわかるように背景色を追加
+        
+        if any(not np.isnan(v) for v in de_b_vals):
+            ax_line.plot(selected_names_for_plot, de_b_vals, marker='o', color='#FF40FF', linestyle='--', label='Before')
+        if any(not np.isnan(v) for v in de_a_vals):
+            ax_line.plot(selected_names_for_plot, de_a_vals, marker='o', color='#00FA00', linestyle='--', label='After')
+            
+        ax_line.set_xlabel('Image Name')
+        ax_line.set_ylabel('ΔE')
+        ax_line.set_xticks(range(len(selected_names_for_plot)))
+        ax_line.set_xticklabels(selected_names_for_plot, rotation=45, ha='right')
+        ax_line.grid(True, linestyle=':', alpha=0.6)
+        ax_line.legend(loc='upper right')
+        fig_line.tight_layout()
+        
+        st.pyplot(fig_line, width='content')
+    else:
+        st.info("No data points selected for the line chart.")
+        
     st.markdown("---")
 
     st.markdown("### Data Overview")
