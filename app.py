@@ -251,7 +251,7 @@ def get_delta_e_from_csv(row):
     return "N/A"
 
 # ==========================================
-# ★ 追加: ユーザー指定の純粋な手動計算ロジック
+# ★ ユーザー指定の純粋な手動計算ロジック
 # ==========================================
 D65_X, D65_Y, D65_Z = 95.047, 100.000, 108.883
 
@@ -363,14 +363,12 @@ def calculate_custom_delta_e(df_meas, row_meas, df_target, row_name, color_space
         if t_row.empty: return "N/A"
         t_row = t_row.iloc[0]
         
-        # 1. ターゲットRGBの取得 (8bit)
         if not all(c in t_row for c in ['R', 'G', 'B']):
             return "N/A (Missing Target RGB)"
             
         R, G, B = float(t_row['R']), float(t_row['G']), float(t_row['B'])
         x_m, y_m = float(row_meas['x']), float(row_meas['y'])
         
-        # 2. 測定されたY値（輝度）の取得
         lum_cols = ['Y', 'Lv', 'Luminance', 'L']
         y_col = next((c for c in lum_cols if c in df_meas.columns), None)
         if not y_col:
@@ -378,33 +376,32 @@ def calculate_custom_delta_e(df_meas, row_meas, df_target, row_name, color_space
         
         Y_m = float(row_meas[y_col])
         
-        # 3. 測定された白のY値を取得し輝度正規化の基準とする
-        white_names = ['white', 'w', '19', 'patch 19', 'neutral 8']
-        df_meas_names = df_meas['Name'].astype(str).str.strip().str.lower()
-        white_row = df_meas[df_meas_names.isin(white_names)]
+        Y_white = None
+        if df_target is not None and all(c in df_target.columns for c in ['R', 'G', 'B']):
+            t_white = df_target[(df_target['R'] == 255) & (df_target['G'] == 255) & (df_target['B'] == 255)]
+            if not t_white.empty:
+                true_white_name = str(t_white.iloc[0]['Name']).strip()
+                m_white = df_meas[df_meas['Name'].astype(str).str.strip() == true_white_name]
+                if not m_white.empty:
+                    Y_white = float(m_white.iloc[0][y_col])
         
-        if not white_row.empty:
-            Y_white = float(white_row.iloc[0][y_col])
-        elif all(c in df_meas.columns for c in ['R', 'G', 'B']):
-            white_row = df_meas[(df_meas['R']==255) & (df_meas['G']==255) & (df_meas['B']==255)]
-            if not white_row.empty:
-                Y_white = float(white_row.iloc[0][y_col])
+        if Y_white is None:
+            white_names = ['white', 'w', 'patch 19', 'neutral 8']
+            df_meas_names = df_meas['Name'].astype(str).str.strip().str.lower()
+            m_white = df_meas[df_meas_names.isin(white_names)]
+            if not m_white.empty:
+                Y_white = float(m_white.iloc[0][y_col])
             else:
                 Y_white = float(df_meas[y_col].max())
-        else:
-            Y_white = float(df_meas[y_col].max())
             
         if Y_white <= 0: return "N/A"
         
-        # 4. Target XYZ計算とLab変換
         target_XYZ = rgb_8bit_to_target_XYZ(R, G, B)
         target_Lab = XYZ_to_Lab(*target_XYZ)
         
-        # 5. Measured XYZ計算とLab変換
         meas_XYZ = measured_xyY_to_XYZ(x_m, y_m, Y_m, Y_white)
         meas_Lab = XYZ_to_Lab(*meas_XYZ)
             
-        # 6. CIEDE2000の算出
         de2000 = delta_E_2000(target_Lab, meas_Lab)
         
         return f"{de2000:.4f}"
@@ -413,7 +410,7 @@ def calculate_custom_delta_e(df_meas, row_meas, df_target, row_name, color_space
         return "N/A"
 
 # ==========================================
-# ★ 追加: UI表示用に正規化Y値を取得するヘルパー関数
+# ★ UI表示用に正規化Y値・XYZ・Labを取得するヘルパー関数
 # ==========================================
 def get_target_y_norm(df_target, row_name):
     try:
@@ -428,7 +425,7 @@ def get_target_y_norm(df_target, row_name):
     except Exception:
         return "N/A"
 
-def get_measured_y_norm(df_meas, row_meas):
+def get_measured_y_norm(df_meas, row_meas, df_target):
     try:
         if df_meas is None: return "N/A"
         lum_cols = ['Y', 'Lv', 'Luminance', 'L']
@@ -437,20 +434,23 @@ def get_measured_y_norm(df_meas, row_meas):
         
         Y_m = float(row_meas[y_col])
         
-        white_names = ['white', 'w', '19', 'patch 19', 'neutral 8']
-        df_meas_names = df_meas['Name'].astype(str).str.strip().str.lower()
-        white_row = df_meas[df_meas_names.isin(white_names)]
+        Y_white = None
+        if df_target is not None and all(c in df_target.columns for c in ['R', 'G', 'B']):
+            t_white = df_target[(df_target['R'] == 255) & (df_target['G'] == 255) & (df_target['B'] == 255)]
+            if not t_white.empty:
+                true_white_name = str(t_white.iloc[0]['Name']).strip()
+                m_white = df_meas[df_meas['Name'].astype(str).str.strip() == true_white_name]
+                if not m_white.empty:
+                    Y_white = float(m_white.iloc[0][y_col])
         
-        if not white_row.empty:
-            Y_white = float(white_row.iloc[0][y_col])
-        elif all(c in df_meas.columns for c in ['R', 'G', 'B']):
-            white_row = df_meas[(df_meas['R']==255) & (df_meas['G']==255) & (df_meas['B']==255)]
-            if not white_row.empty:
-                Y_white = float(white_row.iloc[0][y_col])
+        if Y_white is None:
+            white_names = ['white', 'w', 'patch 19', 'neutral 8']
+            df_meas_names = df_meas['Name'].astype(str).str.strip().str.lower()
+            m_white = df_meas[df_meas_names.isin(white_names)]
+            if not m_white.empty:
+                Y_white = float(m_white.iloc[0][y_col])
             else:
                 Y_white = float(df_meas[y_col].max())
-        else:
-            Y_white = float(df_meas[y_col].max())
             
         if Y_white <= 0: return "N/A"
         Y_norm = (Y_m / Y_white) * 100.0
@@ -458,6 +458,42 @@ def get_measured_y_norm(df_meas, row_meas):
     except Exception:
         return "N/A"
 
+# ★ 追加: 実測データの XYZ, Lab を取得する関数
+def get_meas_xyz_lab(df_meas, row_meas, df_target):
+    try:
+        if df_meas is None: return None
+        lum_cols = ['Y', 'Lv', 'Luminance', 'L']
+        y_col = next((c for c in lum_cols if c in df_meas.columns), None)
+        if not y_col: return None
+        
+        Y_m = float(row_meas[y_col])
+        x_m, y_m_val = float(row_meas['x']), float(row_meas['y'])
+        
+        Y_white = None
+        if df_target is not None and all(c in df_target.columns for c in ['R', 'G', 'B']):
+            t_white = df_target[(df_target['R'] == 255) & (df_target['G'] == 255) & (df_target['B'] == 255)]
+            if not t_white.empty:
+                true_white_name = str(t_white.iloc[0]['Name']).strip()
+                m_white = df_meas[df_meas['Name'].astype(str).str.strip() == true_white_name]
+                if not m_white.empty:
+                    Y_white = float(m_white.iloc[0][y_col])
+        
+        if Y_white is None:
+            white_names = ['white', 'w', 'patch 19', 'neutral 8']
+            df_meas_names = df_meas['Name'].astype(str).str.strip().str.lower()
+            m_white = df_meas[df_meas_names.isin(white_names)]
+            if not m_white.empty:
+                Y_white = float(m_white.iloc[0][y_col])
+            else:
+                Y_white = float(df_meas[y_col].max())
+            
+        if Y_white <= 0: return None
+        
+        m_X, m_Y_norm, m_Z = measured_xyY_to_XYZ(x_m, y_m_val, Y_m, Y_white)
+        m_L, m_a, m_b = XYZ_to_Lab(m_X, m_Y_norm, m_Z)
+        return (m_X, m_Y_norm, m_Z), (m_L, m_a, m_b)
+    except Exception:
+        return None
 
 # --- Layout: Main Page ---
 st.title("CIE 1931 Chromaticity Analyzer")
@@ -496,7 +532,6 @@ if df_t_full is not None and 'Name' in df_t_full.columns: all_names.extend(df_t_
 if df_b_full is not None and 'Name' in df_b_full.columns: all_names.extend(df_b_full['Name'].tolist())
 if df_a_full is not None and 'Name' in df_a_full.columns: all_names.extend(df_a_full['Name'].tolist())
 
-# ★ 追加: 自然順ソート（数値の大小 -> アルファベット順）のためのキー関数
 def natural_sort_key(s):
     return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', str(s))]
 
@@ -527,6 +562,8 @@ st.sidebar.markdown(
 st.sidebar.header("Graph Settings")
 fig_size = st.sidebar.slider("Graph Size (inches)", min_value=2, max_value=20, value=4, step=1)
 show_labels = st.sidebar.checkbox("Show Point Names on Graph", value=False)
+# ★ 追加: XYZ, Lab値のON/OFF切り替え
+show_xyz_lab = st.sidebar.checkbox("Show XYZ & L*a*b* Values", value=False) 
 
 # Data Inspector
 if unique_names:
@@ -547,23 +584,48 @@ if unique_names:
         t_row = df_t_full[df_t_full['Name'] == selected_name]
         if not t_row.empty:
             t_y_norm = get_target_y_norm(df_t_full, selected_name)
-            st.sidebar.markdown(f"<span style='color: black; font-size: 1.2em;'>●</span> **Target Point**:<br>x: `{t_row.iloc[0]['x']:.4f}`<br>y: `{t_row.iloc[0]['y']:.4f}`<br>Y (Norm): `{t_y_norm}`", unsafe_allow_html=True)
+            text_t = f"<span style='color: black; font-size: 1.2em;'>●</span> **Target Point**:<br>x: `{t_row.iloc[0]['x']:.4f}`<br>y: `{t_row.iloc[0]['y']:.4f}`<br>Y (Norm): `{t_y_norm}`"
+            # ★ 追加: Target XYZ, Lab の表示
+            if show_xyz_lab and all(c in t_row.iloc[0] for c in ['R', 'G', 'B']):
+                try:
+                    R, G, B = float(t_row.iloc[0]['R']), float(t_row.iloc[0]['G']), float(t_row.iloc[0]['B'])
+                    t_X, t_Y_val, t_Z = rgb_8bit_to_target_XYZ(R, G, B)
+                    t_L, t_a, t_b = XYZ_to_Lab(t_X, t_Y_val, t_Z)
+                    text_t += f"<br>XYZ: `{t_X:.2f}, {t_Y_val:.2f}, {t_Z:.2f}`<br>L*a*b*: `{t_L:.2f}, {t_a:.2f}, {t_b:.2f}`"
+                except Exception: pass
+            st.sidebar.markdown(text_t, unsafe_allow_html=True)
             
     if df_b_full is not None and 'Name' in df_b_full.columns:
         b_row = df_b_full[df_b_full['Name'] == selected_name]
         if not b_row.empty:
             de_b = get_delta_e_from_csv(b_row.iloc[0])
             calc_de_b = calculate_custom_delta_e(df_b_full, b_row.iloc[0], df_t_full, selected_name, color_space)
-            b_y_norm = get_measured_y_norm(df_b_full, b_row.iloc[0])
-            st.sidebar.markdown(f"<span style='color: #FF40FF; font-size: 1.2em;'>●</span> **Before Point**:<br>x: `{b_row.iloc[0]['x']:.4f}`<br>y: `{b_row.iloc[0]['y']:.4f}`<br>Y (Norm): `{b_y_norm}`<br>ΔE (CSV Data): **`{de_b}`**<br>ΔE (Calculated): **`{calc_de_b}`**", unsafe_allow_html=True)
+            b_y_norm = get_measured_y_norm(df_b_full, b_row.iloc[0], df_t_full)
+            text_b = f"<span style='color: #FF40FF; font-size: 1.2em;'>●</span> **Before Point**:<br>x: `{b_row.iloc[0]['x']:.4f}`<br>y: `{b_row.iloc[0]['y']:.4f}`<br>Y (Norm): `{b_y_norm}`"
+            # ★ 追加: Before XYZ, Lab の表示
+            if show_xyz_lab:
+                res = get_meas_xyz_lab(df_b_full, b_row.iloc[0], df_t_full)
+                if res:
+                    (m_X, m_Y, m_Z), (m_L, m_a, m_b) = res
+                    text_b += f"<br>XYZ: `{m_X:.2f}, {m_Y:.2f}, {m_Z:.2f}`<br>L*a*b*: `{m_L:.2f}, {m_a:.2f}, {m_b:.2f}`"
+            text_b += f"<br>ΔE (CSV Data): **`{de_b}`**<br>ΔE (Calculated): **`{calc_de_b}`**"
+            st.sidebar.markdown(text_b, unsafe_allow_html=True)
             
     if df_a_full is not None and 'Name' in df_a_full.columns:
         a_row = df_a_full[df_a_full['Name'] == selected_name]
         if not a_row.empty:
             de_a = get_delta_e_from_csv(a_row.iloc[0])
             calc_de_a = calculate_custom_delta_e(df_a_full, a_row.iloc[0], df_t_full, selected_name, color_space)
-            a_y_norm = get_measured_y_norm(df_a_full, a_row.iloc[0])
-            st.sidebar.markdown(f"<span style='color: #00FA00; font-size: 1.2em;'>●</span> **After Point**:<br>x: `{a_row.iloc[0]['x']:.4f}`<br>y: `{a_row.iloc[0]['y']:.4f}`<br>Y (Norm): `{a_y_norm}`<br>ΔE (CSV Data): **`{de_a}`**<br>ΔE (Calculated): **`{calc_de_a}`**", unsafe_allow_html=True)
+            a_y_norm = get_measured_y_norm(df_a_full, a_row.iloc[0], df_t_full)
+            text_a = f"<span style='color: #00FA00; font-size: 1.2em;'>●</span> **After Point**:<br>x: `{a_row.iloc[0]['x']:.4f}`<br>y: `{a_row.iloc[0]['y']:.4f}`<br>Y (Norm): `{a_y_norm}`"
+            # ★ 追加: After XYZ, Lab の表示
+            if show_xyz_lab:
+                res = get_meas_xyz_lab(df_a_full, a_row.iloc[0], df_t_full)
+                if res:
+                    (m_X, m_Y, m_Z), (m_L, m_a, m_b) = res
+                    text_a += f"<br>XYZ: `{m_X:.2f}, {m_Y:.2f}, {m_Z:.2f}`<br>L*a*b*: `{m_L:.2f}, {m_a:.2f}, {m_b:.2f}`"
+            text_a += f"<br>ΔE (CSV Data): **`{de_a}`**<br>ΔE (Calculated): **`{calc_de_a}`**"
+            st.sidebar.markdown(text_a, unsafe_allow_html=True)
 
 # ★ Log Out button at the VERY BOTTOM of the sidebar
 st.sidebar.markdown("---")
@@ -574,23 +636,88 @@ if st.sidebar.button("Log Out"):
 # ==========================================
 # ★ Data Overview表示用の列追加ロジック
 # ==========================================
-def prepare_display_df(df_meas, df_target, color_space):
+def prepare_display_df(df_meas, df_target, color_space, show_ext=False):
     if df_meas is None: return None
     df_disp = df_meas.copy()
     if df_target is not None and 'Name' in df_disp.columns:
         calc_de_list = []
         csv_de_list = []
+        
+        # 追加用のリスト
+        if show_ext:
+            x_list, y_norm_list, z_list = [], [], []
+            l_list, a_list, b_list = [], [], []
+            
         for _, row in df_disp.iterrows():
             name = row['Name']
             calc_de_list.append(calculate_custom_delta_e(df_meas, row, df_target, name, color_space))
             csv_de_list.append(get_delta_e_from_csv(row))
+            
+            if show_ext:
+                res = get_meas_xyz_lab(df_meas, row, df_target)
+                if res:
+                    (m_X, m_Y, m_Z), (m_L, m_a, m_b) = res
+                    x_list.append(round(m_X, 2))
+                    y_norm_list.append(round(m_Y, 2))
+                    z_list.append(round(m_Z, 2))
+                    l_list.append(round(m_L, 2))
+                    a_list.append(round(m_a, 2))
+                    b_list.append(round(m_b, 2))
+                else:
+                    x_list.append(np.nan)
+                    y_norm_list.append(np.nan)
+                    z_list.append(np.nan)
+                    l_list.append(np.nan)
+                    a_list.append(np.nan)
+                    b_list.append(np.nan)
+                    
         df_disp['ΔE (CSV Data)'] = csv_de_list
         df_disp['ΔE (Calculated)'] = calc_de_list
+        
+        # ★ 追加: DataFrameにXYZ, Lab列を付与
+        if show_ext:
+            df_disp['X'] = x_list
+            df_disp['Y (Norm)'] = y_norm_list
+            df_disp['Z'] = z_list
+            df_disp['L*'] = l_list
+            df_disp['a*'] = a_list
+            df_disp['b*'] = b_list
+            
     return df_disp
 
-df_b_display = prepare_display_df(df_b_full, df_t_full, color_space)
-df_a_display = prepare_display_df(df_a_full, df_t_full, color_space)
+df_b_display = prepare_display_df(df_b_full, df_t_full, color_space, show_xyz_lab)
+df_a_display = prepare_display_df(df_a_full, df_t_full, color_space, show_xyz_lab)
+
 df_t_display = df_t_full.copy() if df_t_full is not None else None
+
+# ★ 追加: Target Data Overview用にもXYZ, Lab列を付与
+if show_xyz_lab and df_t_display is not None and all(c in df_t_display.columns for c in ['R', 'G', 'B']):
+    x_list, y_list, z_list = [], [], []
+    l_list, a_list, b_list = [], [], []
+    for _, row in df_t_display.iterrows():
+        try:
+            R, G, B = float(row['R']), float(row['G']), float(row['B'])
+            t_X, t_Y_val, t_Z = rgb_8bit_to_target_XYZ(R, G, B)
+            t_L, t_a, t_b = XYZ_to_Lab(t_X, t_Y_val, t_Z)
+            x_list.append(round(t_X, 2))
+            y_list.append(round(t_Y_val, 2))
+            z_list.append(round(t_Z, 2))
+            l_list.append(round(t_L, 2))
+            a_list.append(round(t_a, 2))
+            b_list.append(round(t_b, 2))
+        except Exception:
+            x_list.append(np.nan)
+            y_list.append(np.nan)
+            z_list.append(np.nan)
+            l_list.append(np.nan)
+            a_list.append(np.nan)
+            b_list.append(np.nan)
+    df_t_display['X'] = x_list
+    df_t_display['Y (Norm)'] = y_list
+    df_t_display['Z'] = z_list
+    df_t_display['L*'] = l_list
+    df_t_display['a*'] = a_list
+    df_t_display['b*'] = b_list
 
 # ==========================================
 # 4. Rendering & Output Display
@@ -614,11 +741,10 @@ if df_t_full is not None or df_b_full is not None or df_a_full is not None:
     st.markdown("---")
 
     # ==========================================
-    # ★ 追加: Before/After ΔE 折れ線グラフ
+    # ★ Before/After ΔE 折れ線グラフ
     # ==========================================
     st.markdown("### ΔE Line Chart (Before vs After)")
     
-    # データをフィルタリングするためのマルチセレクトを追加
     selected_names_for_plot = st.multiselect(
         "Select Data Points to Plot:", 
         options=unique_names, 
@@ -654,10 +780,8 @@ if df_t_full is not None or df_b_full is not None or df_a_full is not None:
     if selected_names_for_plot:
         fig_line, ax_line = plt.subplots(figsize=(10, 4))
         
-        # ΔE=2.0ラインのみ実線 (Solid line ONLY for ΔE=2.0)
-        # ※指示に基づき色を 'blue' に変更
         ax_line.axhline(y=2.0, color='blue', linestyle='-', linewidth=1.5, label='ΔE = 2.0')
-        ax_line.axhspan(0, 2.0, color='#00FA00', alpha=0.1) # ΔE<2.0がわかるように背景色を追加
+        ax_line.axhspan(0, 2.0, color='#00FA00', alpha=0.1)
         
         if any(not np.isnan(v) for v in de_b_vals):
             ax_line.plot(selected_names_for_plot, de_b_vals, marker='o', color='#FF40FF', linestyle='--', label='Before')
