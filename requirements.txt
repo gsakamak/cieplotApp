@@ -1,7 +1,9 @@
 streamlit
 pandas
+numpy
 matplotlib
 colour-science
-plotly
+scikit-learn
+scipy
+joblib
 Pillow
-numpy
