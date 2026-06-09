@@ -258,7 +258,6 @@ def get_delta_e_from_csv(row):
 # ★ Gamut Area Calculation Logic
 # ==========================================
 def calculate_gamut_area(df):
-    """Calculates the triangle area from R, G, B patches in the dataframe."""
     if df is None or 'Name' not in df.columns or 'x' not in df.columns or 'y' not in df.columns:
         return None
     try:
@@ -270,7 +269,6 @@ def calculate_gamut_area(df):
         xg, yg = float(g_row['x']), float(g_row['y'])
         xb, yb = float(b_row['x']), float(b_row['y'])
         
-        # Area of a triangle formula
         return 0.5 * abs(xr * (yg - yb) + xg * (yb - yr) + xb * (yr - yg))
     except Exception:
         return None
@@ -335,43 +333,49 @@ def delta_E_2000(Lab1, Lab2):
     R_T = -math.sin(math.radians(2.0 * dTheta)) * R_c
     return math.sqrt((dL_prime / S_L)**2 + (dC_prime / S_C)**2 + (dH_prime / S_H)**2 + R_T * (dC_prime / S_C) * (dH_prime / S_H))
 
+# ★ FIX: ターゲットの x, y がある場合は常に優先し、Y列がなければRGBから補完する
 def calculate_custom_delta_e(df_meas, row_meas, df_target, row_name, color_space):
     try:
         if df_target is None or df_meas is None: return "N/A"
         t_row = df_target[df_target['Name'] == row_name]
         if t_row.empty: return "N/A"
         t_row = t_row.iloc[0]
-        if not all(c in t_row for c in ['R', 'G', 'B']): return "N/A (Missing Target RGB)"
-            
-        R, G, B = float(t_row['R']), float(t_row['G']), float(t_row['B'])
-        x_m, y_m = float(row_meas['x']), float(row_meas['y'])
         
+        target_Lab = None
         lum_cols = ['Y', 'Lv', 'Luminance', 'L']
-        y_col = next((c for c in lum_cols if c in df_meas.columns), None)
-        if not y_col: return "N/A (Missing Measured Y)"
-        Y_m = float(row_meas[y_col])
+        y_col_t = next((c for c in lum_cols if c in t_row.index), None)
         
-        Y_white = None
-        if df_target is not None and all(c in df_target.columns for c in ['R', 'G', 'B']):
-            t_white = df_target[(df_target['R'] == 255) & (df_target['G'] == 255) & (df_target['B'] == 255)]
-            if not t_white.empty:
-                true_white_name = str(t_white.iloc[0]['Name']).strip()
-                m_white = df_meas[df_meas['Name'].astype(str).str.strip() == true_white_name]
-                if not m_white.empty: Y_white = float(m_white.iloc[0][y_col])
-        if Y_white is None:
-            white_names = ['white', 'w', 'patch 19', 'neutral 8']
-            df_meas_names = df_meas['Name'].astype(str).str.strip().str.lower()
-            m_white = df_meas[df_meas_names.isin(white_names)]
-            if not m_white.empty: Y_white = float(m_white.iloc[0][y_col])
-            else: Y_white = float(df_meas[y_col].max())
+        if 'x' in t_row.index and 'y' in t_row.index:
+            x_t, y_t = float(t_row['x']), float(t_row['y'])
             
-        if Y_white <= 0: return "N/A"
-        
-        target_XYZ = rgb_8bit_to_target_XYZ(R, G, B)
-        target_Lab = XYZ_to_Lab(*target_XYZ)
-        meas_XYZ = measured_xyY_to_XYZ(x_m, y_m, Y_m, Y_white)
-        meas_Lab = XYZ_to_Lab(*meas_XYZ)
-        return f"{delta_E_2000(target_Lab, meas_Lab):.4f}"
+            if y_col_t:
+                Y_t = float(t_row[y_col_t])
+            elif all(c in t_row for c in ['R', 'G', 'B']):
+                R, G, B = float(t_row['R']), float(t_row['G']), float(t_row['B'])
+                _, Y_t, _ = rgb_8bit_to_target_XYZ(R, G, B)
+            else:
+                return "N/A"
+
+            if y_t == 0:
+                X_t, Z_t = 0.0, 0.0
+            else:
+                X_t = (x_t * Y_t) / y_t
+                Z_t = ((1.0 - x_t - y_t) * Y_t) / y_t
+            target_Lab = XYZ_to_Lab(X_t, Y_t, Z_t)
+            
+        elif all(c in t_row for c in ['R', 'G', 'B']):
+            R, G, B = float(t_row['R']), float(t_row['G']), float(t_row['B'])
+            target_XYZ = rgb_8bit_to_target_XYZ(R, G, B)
+            target_Lab = XYZ_to_Lab(*target_XYZ)
+        else:
+            return "N/A"
+            
+        res_m = get_meas_xyz_lab(df_meas, row_meas, df_target)
+        if res_m is not None:
+            _, meas_Lab = res_m
+            return f"{delta_E_2000(target_Lab, meas_Lab):.4f}"
+            
+        return "N/A"
     except Exception: return "N/A"
 
 def get_target_y_norm(df_target, row_name):
@@ -380,10 +384,24 @@ def get_target_y_norm(df_target, row_name):
         t_row = df_target[df_target['Name'] == row_name]
         if t_row.empty: return "N/A"
         t_row = t_row.iloc[0]
-        if not all(c in t_row for c in ['R', 'G', 'B']): return "N/A"
-        R, G, B = float(t_row['R']), float(t_row['G']), float(t_row['B'])
-        _, Y, _ = rgb_8bit_to_target_XYZ(R, G, B)
-        return f"{Y:.2f}"
+        
+        lum_cols = ['Y', 'Lv', 'Luminance', 'L']
+        y_col_t = next((c for c in lum_cols if c in t_row.index), None)
+        
+        if 'x' in t_row.index and 'y' in t_row.index:
+            if y_col_t:
+                return f"{float(t_row[y_col_t]):.2f}"
+            elif all(c in t_row for c in ['R', 'G', 'B']):
+                R, G, B = float(t_row['R']), float(t_row['G']), float(t_row['B'])
+                _, Y, _ = rgb_8bit_to_target_XYZ(R, G, B)
+                return f"{Y:.2f}"
+            
+        if all(c in t_row for c in ['R', 'G', 'B']):
+            R, G, B = float(t_row['R']), float(t_row['G']), float(t_row['B'])
+            _, Y, _ = rgb_8bit_to_target_XYZ(R, G, B)
+            return f"{Y:.2f}"
+            
+        return "N/A"
     except Exception: return "N/A"
 
 def get_measured_y_norm(df_meas, row_meas, df_target):
@@ -576,21 +594,44 @@ class YT7875_HybridDigitalTwin:
         )
         return np.round(result.x).astype(int), result.fun
 
+# ★ FIX: AI学習時もTargetのx, y を優先
 def extract_ai_lab_data(df, df_target, is_target=False):
     if df is None: return pd.DataFrame()
     names, labs = [], []
     for _, row in df.iterrows():
         name = str(row['Name']).strip()
-        if is_target and all(c in df.columns for c in ['R', 'G', 'B']) and pd.notna(row.get('R')):
-            X, Y, Z = rgb_8bit_to_target_XYZ(float(row['R']), float(row['G']), float(row['B']))
-            labs.append(XYZ_to_Lab(X, Y, Z))
-            names.append(name)
+        if is_target:
+            lum_cols = ['Y', 'Lv', 'Luminance', 'L']
+            y_col_t = next((c for c in lum_cols if c in df.columns), None)
+            
+            if 'x' in df.columns and 'y' in df.columns:
+                x_t, y_t = float(row['x']), float(row['y'])
+                
+                if y_col_t:
+                    Y_t = float(row[y_col_t])
+                elif all(c in df.columns for c in ['R', 'G', 'B']) and pd.notna(row.get('R')):
+                    _, Y_t, _ = rgb_8bit_to_target_XYZ(float(row['R']), float(row['G']), float(row['B']))
+                else:
+                    continue
+                    
+                if y_t == 0:
+                    X_t, Z_t = 0.0, 0.0
+                else:
+                    X_t = (x_t * Y_t) / y_t
+                    Z_t = ((1.0 - x_t - y_t) * Y_t) / y_t
+                labs.append(XYZ_to_Lab(X_t, Y_t, Z_t))
+                names.append(name)
+            elif all(c in df.columns for c in ['R', 'G', 'B']) and pd.notna(row.get('R')):
+                X, Y, Z = rgb_8bit_to_target_XYZ(float(row['R']), float(row['G']), float(row['B']))
+                labs.append(XYZ_to_Lab(X, Y, Z))
+                names.append(name)
         else:
             res = get_meas_xyz_lab(df, row, df_target)
-            if res:
-                _, (m_L, m_a, m_b) = res
-                labs.append((m_L, m_a, m_b))
+            if res is not None:
+                _, (L, a, b) = res
+                labs.append((L, a, b))
                 names.append(name)
+                
     return pd.DataFrame(labs, columns=['L', 'a', 'b'], index=names)
 
 
@@ -687,13 +728,37 @@ if unique_names:
         t_row = df_t_full[df_t_full['Name'] == selected_name]
         if not t_row.empty:
             t_y_norm = get_target_y_norm(df_t_full, selected_name)
-            text_t = f"<span style='color: black; font-size: 1.2em;'>●</span> **Target Point**:<br>x: `{t_row.iloc[0]['x']:.4f}`<br>y: `{t_row.iloc[0]['y']:.4f}`<br>Y (Norm): `{t_y_norm}`"
-            if show_xyz_lab and all(c in t_row.iloc[0] for c in ['R', 'G', 'B']):
+            text_t = f"<span style='color: black; font-size: 1.2em;'>●</span> **Target Point**:<br>x: `{t_row.iloc[0]['x']:.4f}`<br>y: `{t_row.iloc[0]['y']:.4f}`<br>Y: `{t_y_norm}`"
+            if show_xyz_lab:
                 try:
-                    R, G, B = float(t_row.iloc[0]['R']), float(t_row.iloc[0]['G']), float(t_row.iloc[0]['B'])
-                    t_X, t_Y_val, t_Z = rgb_8bit_to_target_XYZ(R, G, B)
-                    t_L, t_a, t_b = XYZ_to_Lab(t_X, t_Y_val, t_Z)
-                    text_t += f"<br>XYZ: `{t_X:.2f}, {t_Y_val:.2f}, {t_Z:.2f}`<br>L*a*b*: `{t_L:.2f}, {t_a:.2f}, {t_b:.2f}`"
+                    lum_cols = ['Y', 'Lv', 'Luminance', 'L']
+                    y_col_t = next((c for c in lum_cols if c in t_row.iloc[0].index), None)
+                    
+                    # ★ FIX: Inspector表示部分もx,y優先
+                    if 'x' in t_row.iloc[0].index and 'y' in t_row.iloc[0].index:
+                        x_t, y_t = float(t_row.iloc[0]['x']), float(t_row.iloc[0]['y'])
+                        
+                        if y_col_t:
+                            Y_t = float(t_row.iloc[0][y_col_t])
+                        elif all(c in t_row.iloc[0] for c in ['R', 'G', 'B']):
+                            R, G, B = float(t_row.iloc[0]['R']), float(t_row.iloc[0]['G']), float(t_row.iloc[0]['B'])
+                            _, Y_t, _ = rgb_8bit_to_target_XYZ(R, G, B)
+                        else:
+                            Y_t = 0 # skip display logic if no Y
+                            
+                        if Y_t > 0:
+                            if y_t == 0:
+                                X_t, Z_t = 0.0, 0.0
+                            else:
+                                X_t, Z_t = (x_t * Y_t) / y_t, ((1.0 - x_t - y_t) * Y_t) / y_t
+                            t_L, t_a, t_b = XYZ_to_Lab(X_t, Y_t, Z_t)
+                            text_t += f"<br>XYZ: `{X_t:.2f}, {Y_t:.2f}, {Z_t:.2f}`<br>L*a*b*: `{t_L:.2f}, {t_a:.2f}, {t_b:.2f}`"
+                            
+                    elif all(c in t_row.iloc[0] for c in ['R', 'G', 'B']):
+                        R, G, B = float(t_row.iloc[0]['R']), float(t_row.iloc[0]['G']), float(t_row.iloc[0]['B'])
+                        t_X, t_Y_val, t_Z = rgb_8bit_to_target_XYZ(R, G, B)
+                        t_L, t_a, t_b = XYZ_to_Lab(t_X, t_Y_val, t_Z)
+                        text_t += f"<br>XYZ: `{t_X:.2f}, {t_Y_val:.2f}, {t_Z:.2f}`<br>L*a*b*: `{t_L:.2f}, {t_a:.2f}, {t_b:.2f}`"
                 except Exception: pass
             st.sidebar.markdown(text_t, unsafe_allow_html=True)
             
@@ -813,14 +878,40 @@ df_a_display = prepare_display_df(df_a_full, df_t_full, color_space, show_xyz_la
 
 df_t_display = df_t_full.copy() if df_t_full is not None else None
 
-if show_xyz_lab and df_t_display is not None and all(c in df_t_display.columns for c in ['R', 'G', 'B']):
+if show_xyz_lab and df_t_display is not None:
     x_list, y_list, z_list = [], [], []
     l_list, a_list, b_list = [], [], []
     for _, row in df_t_display.iterrows():
         try:
-            R, G, B = float(row['R']), float(row['G']), float(row['B'])
-            t_X, t_Y_val, t_Z = rgb_8bit_to_target_XYZ(R, G, B)
-            t_L, t_a, t_b = XYZ_to_Lab(t_X, t_Y_val, t_Z)
+            lum_cols = ['Y', 'Lv', 'Luminance', 'L']
+            y_col_t = next((c for c in lum_cols if c in row.index), None)
+            
+            # ★ FIX: テーブル表示部もx, y優先
+            if 'x' in row.index and 'y' in row.index:
+                x_t, y_t = float(row['x']), float(row['y'])
+                
+                if y_col_t:
+                    Y_t = float(row[y_col_t])
+                elif all(c in df_t_display.columns for c in ['R', 'G', 'B']):
+                    R, G, B = float(row['R']), float(row['G']), float(row['B'])
+                    _, Y_t, _ = rgb_8bit_to_target_XYZ(R, G, B)
+                else:
+                    raise ValueError
+                
+                if y_t == 0:
+                    t_X, t_Z = 0.0, 0.0
+                else:
+                    t_X, t_Z = (x_t * Y_t) / y_t, ((1.0 - x_t - y_t) * Y_t) / y_t
+                t_Y_val = Y_t
+                t_L, t_a, t_b = XYZ_to_Lab(t_X, t_Y_val, t_Z)
+                
+            elif all(c in df_t_display.columns for c in ['R', 'G', 'B']):
+                R, G, B = float(row['R']), float(row['G']), float(row['B'])
+                t_X, t_Y_val, t_Z = rgb_8bit_to_target_XYZ(R, G, B)
+                t_L, t_a, t_b = XYZ_to_Lab(t_X, t_Y_val, t_Z)
+            else:
+                raise ValueError
+                
             x_list.append(round(t_X, 2))
             y_list.append(round(t_Y_val, 2))
             z_list.append(round(t_Z, 2))
@@ -834,8 +925,9 @@ if show_xyz_lab and df_t_display is not None and all(c in df_t_display.columns f
             l_list.append(np.nan)
             a_list.append(np.nan)
             b_list.append(np.nan)
+            
     df_t_display['X'] = x_list
-    df_t_display['Y (Norm)'] = y_list
+    df_t_display['Y'] = y_list
     df_t_display['Z'] = z_list
     df_t_display['L*'] = l_list
     df_t_display['a*'] = a_list
@@ -847,8 +939,9 @@ if show_xyz_lab and df_t_display is not None and all(c in df_t_display.columns f
 if df_t_full is not None or df_b_full is not None or df_a_full is not None:
     st.markdown("---")
     
+    # ★ FIX: st.pyplot の引数を use_container_width=False から width='content' に変更
     fig = plot_chromaticity_customized(df_t_plot, df_b_plot, df_a_plot, color_space, fig_size, show_labels, df_pred=df_pred_plot, show_pred=show_ai_pred)
-    st.pyplot(fig, width='content')
+    st.pyplot(fig, width='content') 
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=300, facecolor=fig.get_facecolor(), edgecolor='none')
@@ -985,7 +1078,8 @@ if df_t_full is not None or df_b_full is not None or df_a_full is not None:
         ax_line.grid(True, linestyle=':', alpha=0.6)
         ax_line.legend(loc='upper right')
         fig_line.tight_layout()
-        st.pyplot(fig_line, width='stretch')
+        # ★ FIX: st.pyplot の引数を use_container_width=False から width='content' に変更
+        st.pyplot(fig_line, width='content')
     else:
         st.info("No data points selected for the line chart.")
         
