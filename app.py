@@ -124,7 +124,8 @@ def draw_gamut_triangle(ax, df, color, linestyle, label, linewidth):
                 label=label
             )
 
-def plot_chromaticity_customized(df_target, df_before, df_after, color_space, fig_size, show_labels, df_pred=None, show_pred=False):
+# ★ FIX: 引数に xlim と ylim を追加し、デフォルト値を (0.0, 0.9) に設定
+def plot_chromaticity_customized(df_target, df_before, df_after, color_space, fig_size, show_labels, df_pred=None, show_pred=False, xlim=(0.0, 0.9), ylim=(0.0, 0.9)):
     base_size = 8.0
     scale = fig_size / base_size
     
@@ -239,8 +240,10 @@ def plot_chromaticity_customized(df_target, df_before, df_after, color_space, fi
     if legend:
         for text in legend.get_texts(): text.set_color('black')
             
-    ax.set_xlim(0.0, 0.9)
-    ax.set_ylim(0.0, 0.9)
+    # ★ FIX: ハードコードされていた範囲を引数から適用
+    ax.set_xlim(xlim[0], xlim[1])
+    ax.set_ylim(ylim[0], ylim[1])
+    
     fig.tight_layout()
     return fig
 
@@ -333,7 +336,6 @@ def delta_E_2000(Lab1, Lab2):
     R_T = -math.sin(math.radians(2.0 * dTheta)) * R_c
     return math.sqrt((dL_prime / S_L)**2 + (dC_prime / S_C)**2 + (dH_prime / S_H)**2 + R_T * (dC_prime / S_C) * (dH_prime / S_H))
 
-# ★ FIX: ターゲットの x, y がある場合は常に優先し、Y列がなければRGBから補完する
 def calculate_custom_delta_e(df_meas, row_meas, df_target, row_name, color_space):
     try:
         if df_target is None or df_meas is None: return "N/A"
@@ -594,7 +596,6 @@ class YT7875_HybridDigitalTwin:
         )
         return np.round(result.x).astype(int), result.fun
 
-# ★ FIX: AI学習時もTargetのx, y を優先
 def extract_ai_lab_data(df, df_target, is_target=False):
     if df is None: return pd.DataFrame()
     names, labs = [], []
@@ -698,6 +699,15 @@ show_labels = st.sidebar.checkbox("Show Point Names on Graph", value=False)
 show_xyz_lab = st.sidebar.checkbox("Show XYZ & L*a*b* Values", value=False) 
 show_ai_pred = st.sidebar.checkbox("Show AI Prediction", value=True)
 
+# target, before, afterの表示選択トグル
+show_target = st.sidebar.checkbox("Show Target Data on Plot", value=True)
+show_before = st.sidebar.checkbox("Show Before Data on Plot", value=True)
+show_after = st.sidebar.checkbox("Show After Data on Plot", value=True)
+
+# ★ ADDED: X/Y Axis Range Selectors
+x_axis_range = st.sidebar.slider("X-Axis Range", min_value=0.0, max_value=1.0, value=(0.0, 0.9), step=0.01)
+y_axis_range = st.sidebar.slider("Y-Axis Range", min_value=0.0, max_value=1.0, value=(0.0, 0.9), step=0.01)
+
 df_t_plot = df_t_full
 df_b_plot = df_b_full
 df_a_plot = df_a_full
@@ -734,7 +744,6 @@ if unique_names:
                     lum_cols = ['Y', 'Lv', 'Luminance', 'L']
                     y_col_t = next((c for c in lum_cols if c in t_row.iloc[0].index), None)
                     
-                    # ★ FIX: Inspector表示部分もx,y優先
                     if 'x' in t_row.iloc[0].index and 'y' in t_row.iloc[0].index:
                         x_t, y_t = float(t_row.iloc[0]['x']), float(t_row.iloc[0]['y'])
                         
@@ -744,7 +753,7 @@ if unique_names:
                             R, G, B = float(t_row.iloc[0]['R']), float(t_row.iloc[0]['G']), float(t_row.iloc[0]['B'])
                             _, Y_t, _ = rgb_8bit_to_target_XYZ(R, G, B)
                         else:
-                            Y_t = 0 # skip display logic if no Y
+                            Y_t = 0
                             
                         if Y_t > 0:
                             if y_t == 0:
@@ -886,7 +895,6 @@ if show_xyz_lab and df_t_display is not None:
             lum_cols = ['Y', 'Lv', 'Luminance', 'L']
             y_col_t = next((c for c in lum_cols if c in row.index), None)
             
-            # ★ FIX: テーブル表示部もx, y優先
             if 'x' in row.index and 'y' in row.index:
                 x_t, y_t = float(row['x']), float(row['y'])
                 
@@ -939,8 +947,17 @@ if show_xyz_lab and df_t_display is not None:
 if df_t_full is not None or df_b_full is not None or df_a_full is not None:
     st.markdown("---")
     
-    # ★ FIX: st.pyplot の引数を use_container_width=False から width='content' に変更
-    fig = plot_chromaticity_customized(df_t_plot, df_b_plot, df_a_plot, color_space, fig_size, show_labels, df_pred=df_pred_plot, show_pred=show_ai_pred)
+    # チェックボックスの状態に基づき、描画用のデータフレームをフィルタリング
+    df_t_render = df_t_plot if show_target else None
+    df_b_render = df_b_plot if show_before else None
+    df_a_render = df_a_plot if show_after else None
+    
+    # ★ FIX: 追加した xlim, ylim パラメータを関数に渡す
+    fig = plot_chromaticity_customized(
+        df_t_render, df_b_render, df_a_render, color_space, fig_size, 
+        show_labels, df_pred=df_pred_plot, show_pred=show_ai_pred,
+        xlim=x_axis_range, ylim=y_axis_range
+    )
     st.pyplot(fig, width='content') 
 
     buf = io.BytesIO()
@@ -1078,7 +1095,6 @@ if df_t_full is not None or df_b_full is not None or df_a_full is not None:
         ax_line.grid(True, linestyle=':', alpha=0.6)
         ax_line.legend(loc='upper right')
         fig_line.tight_layout()
-        # ★ FIX: st.pyplot の引数を use_container_width=False から width='content' に変更
         st.pyplot(fig_line, width='content')
     else:
         st.info("No data points selected for the line chart.")
