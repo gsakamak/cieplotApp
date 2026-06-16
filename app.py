@@ -124,7 +124,6 @@ def draw_gamut_triangle(ax, df, color, linestyle, label, linewidth):
                 label=label
             )
 
-# ★ FIX: 引数に xlim と ylim を追加し、デフォルト値を (0.0, 0.9) に設定
 def plot_chromaticity_customized(df_target, df_before, df_after, color_space, fig_size, show_labels, df_pred=None, show_pred=False, xlim=(0.0, 0.9), ylim=(0.0, 0.9)):
     base_size = 8.0
     scale = fig_size / base_size
@@ -183,9 +182,13 @@ def plot_chromaticity_customized(df_target, df_before, df_after, color_space, fi
     ax.plot(xy[:, 0], xy[:, 1], color='#E0E0E0', linewidth=line_w_thin, zorder=1)
     ax.plot([xy[0, 0], xy[-1, 0]], [xy[0, 1], xy[-1, 1]], color='#E0E0E0', linewidth=line_w_thin, zorder=1)
 
+    # ★ FIX: BT.2020 の基準座標を追加
     if color_space.upper() == 'DCI-P3':
         gamut_x, gamut_y = [0.680, 0.265, 0.150, 0.680], [0.320, 0.690, 0.060, 0.320]
         label_text = 'DCI-P3 (Ref)'
+    elif color_space.upper() == 'BT.2020':
+        gamut_x, gamut_y = [0.708, 0.170, 0.131, 0.708], [0.292, 0.797, 0.046, 0.292]
+        label_text = 'BT.2020 (Ref)'
     else:
         gamut_x, gamut_y = [0.640, 0.300, 0.150, 0.640], [0.330, 0.600, 0.060, 0.330]
         label_text = 'sRGB (Ref)'
@@ -240,7 +243,6 @@ def plot_chromaticity_customized(df_target, df_before, df_after, color_space, fi
     if legend:
         for text in legend.get_texts(): text.set_color('black')
             
-    # ★ FIX: ハードコードされていた範囲を引数から適用
     ax.set_xlim(xlim[0], xlim[1])
     ax.set_ylim(ylim[0], ylim[1])
     
@@ -656,7 +658,8 @@ with col3:
     st.subheader("After")
     file_after = st.file_uploader("Upload After CSV", type=["csv"], key="after")
     
-color_space = st.selectbox("Reference Gamut:", ["sRGB", "DCI-P3"])
+# ★ FIX: BT.2020 を追加
+color_space = st.selectbox("Reference Gamut:", ["sRGB", "DCI-P3", "BT.2020"])
 
 # --- Core Processing Logic ---
 if file_target is not None:
@@ -699,12 +702,10 @@ show_labels = st.sidebar.checkbox("Show Point Names on Graph", value=False)
 show_xyz_lab = st.sidebar.checkbox("Show XYZ & L*a*b* Values", value=False) 
 show_ai_pred = st.sidebar.checkbox("Show AI Prediction", value=True)
 
-# target, before, afterの表示選択トグル
 show_target = st.sidebar.checkbox("Show Target Data on Plot", value=True)
 show_before = st.sidebar.checkbox("Show Before Data on Plot", value=True)
 show_after = st.sidebar.checkbox("Show After Data on Plot", value=True)
 
-# ★ ADDED: X/Y Axis Range Selectors
 x_axis_range = st.sidebar.slider("X-Axis Range", min_value=0.0, max_value=1.0, value=(0.0, 0.9), step=0.01)
 y_axis_range = st.sidebar.slider("Y-Axis Range", min_value=0.0, max_value=1.0, value=(0.0, 0.9), step=0.01)
 
@@ -947,12 +948,10 @@ if show_xyz_lab and df_t_display is not None:
 if df_t_full is not None or df_b_full is not None or df_a_full is not None:
     st.markdown("---")
     
-    # チェックボックスの状態に基づき、描画用のデータフレームをフィルタリング
     df_t_render = df_t_plot if show_target else None
     df_b_render = df_b_plot if show_before else None
     df_a_render = df_a_plot if show_after else None
     
-    # ★ FIX: 追加した xlim, ylim パラメータを関数に渡す
     fig = plot_chromaticity_customized(
         df_t_render, df_b_render, df_a_render, color_space, fig_size, 
         show_labels, df_pred=df_pred_plot, show_pred=show_ai_pred,
@@ -993,7 +992,14 @@ if df_t_full is not None or df_b_full is not None or df_a_full is not None:
         except Exception:
             return None
             
-    ref_area = 0.1520 if color_space.upper() == "DCI-P3" else 0.11205
+    # ★ FIX: BT.2020 の基準面積を追加
+    if color_space.upper() == "DCI-P3":
+        ref_area = 0.1520
+    elif color_space.upper() == "BT.2020":
+        ref_area = 0.21187
+    else:
+        ref_area = 0.11205
+        
     area_b = get_gamut_area(df_b_full)
     area_a = get_gamut_area(df_a_full)
     
@@ -1096,6 +1102,29 @@ if df_t_full is not None or df_b_full is not None or df_a_full is not None:
         ax_line.legend(loc='upper right')
         fig_line.tight_layout()
         st.pyplot(fig_line, width='content')
+        
+        valid_b = [v for v in de_b_vals if not np.isnan(v)]
+        valid_a = [v for v in de_a_vals if not np.isnan(v)]
+        valid_p = [v for v in de_p_vals if not np.isnan(v)]
+
+        st.markdown("**ΔE Statistics (Plotted Data)**")
+        stat_cols = st.columns(3)
+        with stat_cols[0]:
+            if show_before_line and valid_b:
+                st.markdown(f"<div style='color:#FF40FF;'><b>Before</b><br>Avg: {sum(valid_b)/len(valid_b):.2f}<br>Max: {max(valid_b):.2f} / Min: {min(valid_b):.2f}</div>", unsafe_allow_html=True)
+            else:
+                st.markdown("<div style='color:#FF40FF;'><b>Before</b><br>N/A</div>", unsafe_allow_html=True)
+        with stat_cols[1]:
+            if show_after_line and valid_a:
+                st.markdown(f"<div style='color:#008000;'><b>After</b><br>Avg: {sum(valid_a)/len(valid_a):.2f}<br>Max: {max(valid_a):.2f} / Min: {min(valid_a):.2f}</div>", unsafe_allow_html=True)
+            else:
+                st.markdown("<div style='color:#008000;'><b>After</b><br>N/A</div>", unsafe_allow_html=True)
+        with stat_cols[2]:
+            if show_ai_pred and valid_p:
+                st.markdown(f"<div style='color:blue;'><b>AI Prediction</b><br>Avg: {sum(valid_p)/len(valid_p):.2f}<br>Max: {max(valid_p):.2f} / Min: {min(valid_p):.2f}</div>", unsafe_allow_html=True)
+            else:
+                st.markdown("<div style='color:blue;'><b>AI Prediction</b><br>N/A</div>", unsafe_allow_html=True)
+
     else:
         st.info("No data points selected for the line chart.")
         
