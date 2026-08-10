@@ -124,7 +124,8 @@ def draw_gamut_triangle(ax, df, color, linestyle, label, linewidth):
                 label=label
             )
 
-def plot_chromaticity_customized(df_target, df_before, df_after, color_space, fig_size, show_labels, df_pred=None, show_pred=False, xlim=(0.0, 0.9), ylim=(0.0, 0.9)):
+# ★ FIX: 引数に show_before_gamut を追加
+def plot_chromaticity_customized(df_target, df_before, df_after, color_space, fig_size, show_labels, df_pred=None, show_pred=False, xlim=(0.0, 0.9), ylim=(0.0, 0.9), show_before_gamut=True):
     base_size = 8.0
     scale = fig_size / base_size
     
@@ -182,7 +183,6 @@ def plot_chromaticity_customized(df_target, df_before, df_after, color_space, fi
     ax.plot(xy[:, 0], xy[:, 1], color='#E0E0E0', linewidth=line_w_thin, zorder=1)
     ax.plot([xy[0, 0], xy[-1, 0]], [xy[0, 1], xy[-1, 1]], color='#E0E0E0', linewidth=line_w_thin, zorder=1)
 
-    # ★ FIX: BT.2020 の基準座標を追加
     if color_space.upper() == 'DCI-P3':
         gamut_x, gamut_y = [0.680, 0.265, 0.150, 0.680], [0.320, 0.690, 0.060, 0.320]
         label_text = 'DCI-P3 (Ref)'
@@ -217,7 +217,9 @@ def plot_chromaticity_customized(df_target, df_before, df_after, color_space, fi
 
     if df_before is not None and not df_before.empty and 'x' in df_before.columns and 'y' in df_before.columns:
         ax.scatter(df_before['x'], df_before['y'], marker='o', color='#FF40FF', s=marker_data, label='Before', zorder=6)
-        draw_gamut_triangle(ax, df_before, color='#FF40FF', linestyle=':', label='Before Gamut', linewidth=line_w*1.2)
+        # ★ FIX: Before Gamut の結線をトグルで制御
+        if show_before_gamut:
+            draw_gamut_triangle(ax, df_before, color='#FF40FF', linestyle=':', label='Before Gamut', linewidth=line_w*1.2)
         if show_labels and 'Name' in df_before.columns:
             for _, row in df_before.iterrows():
                 ax.text(row['x'] + text_offset, row['y'] - text_offset*1.5, str(row['Name']), fontsize=font_xs, color='#D500D5', zorder=8)
@@ -658,7 +660,6 @@ with col3:
     st.subheader("After")
     file_after = st.file_uploader("Upload After CSV", type=["csv"], key="after")
     
-# ★ FIX: BT.2020 を追加
 color_space = st.selectbox("Reference Gamut:", ["sRGB", "DCI-P3", "BT.2020"])
 
 # --- Core Processing Logic ---
@@ -704,6 +705,8 @@ show_ai_pred = st.sidebar.checkbox("Show AI Prediction", value=True)
 
 show_target = st.sidebar.checkbox("Show Target Data on Plot", value=True)
 show_before = st.sidebar.checkbox("Show Before Data on Plot", value=True)
+# ★ ADDED: Before Gamut Triangle Toggle
+show_before_gamut = st.sidebar.checkbox("Show Before Gamut Triangle", value=True)
 show_after = st.sidebar.checkbox("Show After Data on Plot", value=True)
 
 x_axis_range = st.sidebar.slider("X-Axis Range", min_value=0.0, max_value=1.0, value=(0.0, 0.9), step=0.01)
@@ -952,10 +955,11 @@ if df_t_full is not None or df_b_full is not None or df_a_full is not None:
     df_b_render = df_b_plot if show_before else None
     df_a_render = df_a_plot if show_after else None
     
+    # ★ FIX: 関数に show_before_gamut パラメータを渡す
     fig = plot_chromaticity_customized(
         df_t_render, df_b_render, df_a_render, color_space, fig_size, 
         show_labels, df_pred=df_pred_plot, show_pred=show_ai_pred,
-        xlim=x_axis_range, ylim=y_axis_range
+        xlim=x_axis_range, ylim=y_axis_range, show_before_gamut=show_before_gamut
     )
     st.pyplot(fig, width='content') 
 
@@ -992,7 +996,6 @@ if df_t_full is not None or df_b_full is not None or df_a_full is not None:
         except Exception:
             return None
             
-    # ★ FIX: BT.2020 の基準面積を追加
     if color_space.upper() == "DCI-P3":
         ref_area = 0.1520
     elif color_space.upper() == "BT.2020":
